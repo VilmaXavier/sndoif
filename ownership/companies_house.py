@@ -43,9 +43,6 @@ def get_company_profile(company_number: str) -> dict[str, Any]:
     url = f"{BASE_URL}/company/{company_number}"
 
     response = requests.get(url, auth=(api_key, ""))
-
-    # Fail loudly and immediately if the request was not successful,
-    # instead of silently returning bad or partial data.
     response.raise_for_status()
 
     return response.json()
@@ -74,17 +71,64 @@ def get_officers(company_number: str) -> list[dict[str, Any]]:
 
     data = response.json()
 
-    # The API wraps the actual list of officers inside an "items" key,
-    # alongside metadata like total counts -- we only care about "items".
+    return data["items"]
+
+
+def get_psc(company_number: str) -> list[dict[str, Any]]:
+    """Fetch Persons with Significant Control (beneficial ownership) data.
+
+    PSC records may represent an individual person, a corporate entity
+    that controls the company, or a legal statement (e.g. "no PSC could
+    be identified"). Not every company has PSC data -- older companies
+    predating the 2016 PSC requirement, or companies with no PSC filed,
+    commonly return no records at all. That absence is itself meaningful
+    for due-diligence purposes, so we treat it as a normal case rather
+    than an error.
+
+    Args:
+        company_number: The Companies House company registration number.
+
+    Returns:
+        A list of PSC record dictionaries. Returns an empty list if the
+        company has no PSC data on file (Companies House responds with
+        a 404 in this case, which we treat as "no data" rather than
+        a failure).
+
+    Raises:
+        requests.HTTPError: For any failure other than "no PSC data",
+            e.g. 401 for a bad API key.
+    """
+    api_key = os.getenv("COMPANIES_HOUSE_API_KEY")
+
+    url = f"{BASE_URL}/company/{company_number}/persons-with-significant-control"
+
+    response = requests.get(url, auth=(api_key, ""))
+
+    # A 404 here specifically means "this company has no PSC data" --
+    # not a broken request. We treat that as a normal, valid outcome
+    # (an empty list) instead of letting raise_for_status() blow up.
+    if response.status_code == 404:
+        return []
+
+    response.raise_for_status()
+
+    data = response.json()
+
     return data["items"]
 
 
 if __name__ == "__main__":
-    profile = get_company_profile("00000006")
+    profile = get_company_profile("09446231")
     print(profile["company_name"])
     print(profile["company_status"])
 
-    officers = get_officers("00000006")
+    officers = get_officers("09446231")
     print(f"Found {len(officers)} officers")
-    for officer in officers:
-        print(officer["name"], "-", officer["officer_role"])
+
+    psc_records = get_psc("09446231")
+    print(f"Found {len(psc_records)} PSC records")
+    for psc in psc_records:
+        # Not every PSC record has the same fields -- .get() returns
+        # None instead of raising an error if a key is missing, which
+        # matters here since corporate PSCs won't have "nationality".
+        print(psc.get("name"), "-", psc.get("nationality"))
