@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -88,12 +88,29 @@ def screen_beneficial_owners(names: list[str]) -> list[dict[str, Any]]:
     logger.info("Loading OFAC SDN + alias data")
     sanctions_names = _load_sanctions_names()
 
+    # Build the candidate list once, outside the per-name loop, so we
+    # don't re-normalize 20,000+ names for every single screened name.
+    candidates = sanctions_names["name"].tolist()
+    normalized_candidates = [c.strip().lower() for c in candidates]
+
     flagged: list[dict[str, Any]] = []
 
     for name in names:
-        for _, row in sanctions_names.iterrows():
-            score = name_similarity(name, row["name"])
+        # process.extract() compares `name` against the ENTIRE
+        # candidates list internally (in optimized C code) and
+        # returns the top matches as (matched_string, score, index)
+        # tuples -- no manual loop needed. limit=5 caps how many top
+        # matches come back per screened name.
+        matches = process.extract(
+            name.strip().lower(),
+            normalized_candidates,
+            scorer=fuzz.token_sort_ratio,
+            limit=5,
+        )
+
+        for matched_text, score, index in matches:
             if score >= MATCH_SCORE_THRESHOLD:
+                row = sanctions_names.iloc[index]
                 flagged.append({
                     "screened_name": name,
                     "matched_name": row["name"],
