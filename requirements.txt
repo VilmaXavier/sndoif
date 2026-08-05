@@ -3,3 +3,4 @@
    networkx
    python-dotenv
    rapidfuzz
+   pytest
