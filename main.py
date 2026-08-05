@@ -12,6 +12,7 @@ import logging
 from ownership.companies_house import build_ownership_records
 from ownership.ownership_graph import (
     build_graph,
+    detect_jurisdiction_red_flags,
     detect_red_flags,
     entity_pairs_with_shared_person,
 )
@@ -46,6 +47,7 @@ def main() -> None:
 
     graph = build_graph(records)
     red_flags = detect_red_flags(graph)
+    jurisdiction_flags = detect_jurisdiction_red_flags(records)
     shared_pairs = entity_pairs_with_shared_person(graph)
 
     print("\n" + "=" * 60)
@@ -69,6 +71,10 @@ def main() -> None:
     print(f"\nCircular ownership red flags: {len(red_flags['circular_ownership'])}")
     for flag in red_flags["circular_ownership"]:
         print(f"  - {flag['cycle']}")
+
+    print(f"\nJurisdiction red flags: {len(jurisdiction_flags)}")
+    for flag in jurisdiction_flags:
+        print(f"  - {flag['company_name']}: PSC {flag['psc_name']} registered in {flag['jurisdiction']}")
 
     print(f"\nEntity pairs sharing a person (for fusion handoff): {len(shared_pairs)}")
     for pair in shared_pairs[:10]:  # just preview the first 10

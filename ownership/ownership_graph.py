@@ -25,6 +25,20 @@ logger = logging.getLogger(__name__)
 # data -- same principle as the sanctions match threshold.
 SHARED_DIRECTOR_THRESHOLD = 3
 
+# High-risk jurisdictions per FATF's "Black List" (High-Risk Jurisdictions
+# subject to a Call for Action) and "Grey List" (Jurisdictions under
+# Increased Monitoring), as published at https://www.fatf-gafi.org.
+# This list changes periodically -- it should be re-checked against
+# FATF's current published lists before being relied on in production,
+# and that check-date should be noted in the report.
+FATF_HIGH_RISK_JURISDICTIONS = {
+    "North Korea", "Iran", "Myanmar",  # FATF black list (Call for Action)
+    "Bulgaria", "Burkina Faso", "Cameroon", "Croatia", "Democratic Republic of the Congo",
+    "Haiti", "Kenya", "Mali", "Monaco", "Mozambique", "Namibia", "Nigeria",
+    "Philippines", "Senegal", "South Africa", "South Sudan", "Syria", "Tanzania",
+    "Venezuela", "Vietnam", "Yemen",  # FATF grey list (Increased Monitoring) -- illustrative subset
+}
+
 
 def build_graph(records: list[OwnershipRecord]) -> nx.DiGraph:
     """Build a directed graph linking people to the companies they control.
@@ -133,7 +147,7 @@ def entity_pairs_with_shared_person(graph: nx.DiGraph) -> list[dict[str, Any]]:
 
 
 def detect_red_flags(graph: nx.DiGraph) -> dict[str, list[dict[str, Any]]]:
-    """Run all red-flag detectors over the graph.
+    """Run structural red-flag detectors over the graph.
 
     Args:
         graph: A graph built by build_graph().
@@ -189,6 +203,38 @@ def detect_red_flags(graph: nx.DiGraph) -> dict[str, list[dict[str, Any]]]:
     }
 
 
+def detect_jurisdiction_red_flags(records: list[OwnershipRecord]) -> list[dict[str, Any]]:
+    """Flag corporate PSCs registered in a FATF high-risk jurisdiction.
+
+    Args:
+        records: OwnershipRecord objects to check.
+
+    Returns:
+        A list of dicts, one per flagged PSC, with the company it
+        controls, the PSC's name, and the flagged jurisdiction.
+    """
+    flagged: list[dict[str, Any]] = []
+
+    for record in records:
+        for psc in record.psc:
+            # Corporate PSCs nest their registration country inside an
+            # "identification" object; individual PSCs use a flatter
+            # "country_of_residence" field instead. We check both,
+            # defensively, since not every PSC record has either.
+            identification = psc.get("identification", {})
+            country = identification.get("country_registered") or psc.get("country_of_residence")
+
+            if country and country in FATF_HIGH_RISK_JURISDICTIONS:
+                flagged.append({
+                    "company_name": record.company_name,
+                    "psc_name": psc.get("name"),
+                    "jurisdiction": country,
+                })
+
+    logger.info("Found %d jurisdiction-based red flags", len(flagged))
+    return flagged
+
+
 if __name__ == "__main__":
     # A deliberately constructed test case, not real API data -- built
     # to exercise both red-flag detectors with a known, predictable
@@ -233,3 +279,8 @@ if __name__ == "__main__":
     print(f"\nCircular ownership ({len(flags['circular_ownership'])}):")
     for flag in flags["circular_ownership"]:
         print(f"  {flag['cycle']}")
+
+    jurisdiction_flags = detect_jurisdiction_red_flags(test_records)
+    print(f"\nJurisdiction red flags ({len(jurisdiction_flags)}):")
+    for flag in jurisdiction_flags:
+        print(f"  {flag}")
