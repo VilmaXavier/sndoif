@@ -27,8 +27,11 @@ COMPANY_SAMPLE = [
     "09446231",  # Monzo Bank Limited
     "08804411",  # Revolut Ltd
     "00000006",  # Marine and General Mutual Life Assurance Society (dissolved, old)
+    "13211214",  # Wise Plc
+    "07209813",  # Wise Payments Limited
+    "11465966",  # Deliveroo International Ltd
+    "10970586",  # Deliveroo SP Ltd
 ]
-
 
 def main() -> None:
     """Run the full ownership & compliance pipeline on the sample."""
