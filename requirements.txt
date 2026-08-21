@@ -5,3 +5,5 @@
    rapidfuzz
    pytest
 python-whois
+
+beautifulsoup4
