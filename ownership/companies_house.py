@@ -140,3 +140,41 @@ if __name__ == "__main__":
     for record in results:
         print(f"- {record.company_name} ({record.company_number}): "
               f"{len(record.officers)} officers, {len(record.psc)} PSC records")
+
+def search_companies_by_name(query: str, max_results: int = 10) -> list[dict[str, Any]]:
+    """Search Companies House for companies matching a name.
+
+    Uses Companies House's dedicated search endpoint, which does
+    fuzzy/partial name matching server-side and returns a ranked list
+    of candidates -- unlike get_company_profile(), which requires an
+    exact company number.
+
+    Args:
+        query: A company name or partial name, e.g. "Deliveroo".
+        max_results: Maximum number of results to return.
+
+    Returns:
+        A list of dicts, each with the fields useful for letting a
+        user pick the right company: company_number, title (name),
+        company_status, address_snippet.
+    """
+    api_key = os.getenv("COMPANIES_HOUSE_API_KEY")
+    url = f"{BASE_URL}/search/companies"
+    params = {"q": query, "items_per_page": max_results}
+
+    response = requests.get(url, params=params, auth=(api_key, ""))
+    response.raise_for_status()
+
+    data = response.json()
+
+    results = []
+    for item in data.get("items", []):
+        results.append({
+            "company_number": item.get("company_number"),
+            "title": item.get("title"),
+            "company_status": item.get("company_status"),
+            "address_snippet": item.get("address_snippet"),
+        })
+
+    logger.info("Found %d companies matching %r", len(results), query)
+    return results

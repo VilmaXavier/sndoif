@@ -1,12 +1,12 @@
 ﻿"""
 SNDOIF -- minimal web frontend.
 
-A small Flask app: type a Companies House company number, and the
-server runs the real ownership pipeline against it (live API calls),
-checks it against the existing entity sample for shared-person and
-red-flag connections, and displays the results plus two embedded
-interactive graphs: a focused view (just this company's immediate
-network) and a full view (the entire known sample).
+Supports searching by company name (via Companies House's search
+endpoint, showing a list of candidates to choose from) or by an exact
+company number (skipping straight to analysis). Runs the real
+ownership pipeline live, checks it against the existing entity sample
+for shared-person and red-flag connections, and displays results plus
+two embedded interactive graphs: a focused view and a full view.
 """
 
 import logging
@@ -17,7 +17,7 @@ from flask import Flask, render_template, request
 
 from fusion.scoring import score_all_pairs
 from fusion.visualization import build_visualization
-from ownership.companies_house import build_ownership_records
+from ownership.companies_house import build_ownership_records, search_companies_by_name
 from ownership.ownership_graph import (
     build_graph,
     detect_jurisdiction_red_flags,
@@ -44,6 +44,20 @@ os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
 def index():
     """The search form page."""
     return render_template("index.html")
+
+
+@app.route("/search-by-name", methods=["POST"])
+def search_by_name():
+    """Search Companies House by name, show a list of candidates to pick from."""
+    query = request.form.get("query", "").strip()
+
+    if not query:
+        return render_template("index.html", error="Please enter a company name.")
+
+    logger.info("Searching by name: %s", query)
+    results = search_companies_by_name(query)
+
+    return render_template("name_results.html", query=query, results=results)
 
 
 @app.route("/search", methods=["POST"])
@@ -91,9 +105,6 @@ def search():
         if searched_record.company_name in f["companies"]
     ]
 
-    # Build BOTH a focused view (this company's immediate network) and
-    # a full view (every company in the current sample) -- the results
-    # page lets the analyst toggle between them without a page reload.
     if searched_record.company_name in graph:
         focused_graph = nx.ego_graph(graph, searched_record.company_name, radius=2, undirected=True)
     else:
