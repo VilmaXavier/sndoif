@@ -1,0 +1,186 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ company_name }} -- SNDOIF Results</title>
+    <style>
+        :root {
+            --navy: #1a2b4c;
+            --blue: #457b9d;
+            --bg: #f5f7fa;
+            --red: #e63946;
+            --orange: #f4a261;
+            --green: #2a9d8f;
+            --border: #d8dde3;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: #1d2330;
+            margin: 0;
+            padding: 24px;
+        }
+        .wrap { max-width: 960px; margin: 0 auto; }
+        .back {
+            display: inline-block;
+            color: var(--blue);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        .header-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(26, 43, 76, 0.08);
+            padding: 28px;
+            margin-bottom: 20px;
+        }
+        h1 { color: var(--navy); margin: 0 0 6px; font-size: 26px; word-break: break-word; }
+        .meta { color: #5a6472; font-size: 14px; }
+        .status-pill {
+            display: inline-block;
+            background: var(--green);
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+            margin-left: 8px;
+            text-transform: capitalize;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .section-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(26, 43, 76, 0.08);
+            padding: 22px;
+        }
+        .section-card h2 {
+            font-size: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #5a6472;
+            margin: 0 0 12px;
+        }
+        .ok { color: var(--green); font-size: 14px; }
+        .flag-item {
+            background: #fdecea;
+            color: var(--red);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .flag-item.low { background: #fef3e7; color: #c1660a; }
+        ul { list-style: none; margin: 0; padding: 0; }
+        .graph-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(26, 43, 76, 0.08);
+            padding: 22px;
+        }
+        .toggle-row { display: flex; gap: 8px; margin-bottom: 14px; }
+        .toggle-btn {
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid var(--border);
+            background: white;
+            color: #5a6472;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .toggle-btn.active { background: var(--navy); color: white; border-color: var(--navy); }
+        iframe {
+            width: 100%;
+            height: 650px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        @media (max-width: 600px) {
+            body { padding: 12px; }
+            .header-card, .section-card, .graph-card { padding: 18px; }
+            iframe { height: 450px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <a class="back" href="/">&larr; New search</a>
+
+        <div class="header-card">
+            <h1>{{ company_name }}<span class="status-pill">{{ company_status }}</span></h1>
+            <p class="meta">Company number {{ company_number }} &nbsp;|&nbsp; {{ officer_count }} officers &nbsp;|&nbsp; {{ psc_count }} PSC records</p>
+        </div>
+
+        <div class="grid">
+            <div class="section-card">
+                <h2>Sanctions Screening</h2>
+                {% if sanctions_matches %}
+                    <ul>{% for m in sanctions_matches %}<li class="flag-item">{{ m.screened_name }} ~ {{ m.matched_name }} (score {{ "%.1f"|format(m.score) }})</li>{% endfor %}</ul>
+                {% else %}
+                    <p class="ok">No sanctions matches found.</p>
+                {% endif %}
+            </div>
+
+            <div class="section-card">
+                <h2>Shared Director Flags</h2>
+                {% if shared_directors %}
+                    <ul>{% for f in shared_directors %}<li class="flag-item">{{ f.person }}: linked to {{ f.company_count }} companies</li>{% endfor %}</ul>
+                {% else %}
+                    <p class="ok">None found.</p>
+                {% endif %}
+            </div>
+
+            <div class="section-card">
+                <h2>Jurisdiction Flags</h2>
+                {% if jurisdiction_flags %}
+                    <ul>{% for f in jurisdiction_flags %}<li class="flag-item">PSC {{ f.psc_name }} registered in {{ f.jurisdiction }}</li>{% endfor %}</ul>
+                {% else %}
+                    <p class="ok">None found.</p>
+                {% endif %}
+            </div>
+
+            <div class="section-card">
+                <h2>Connections to Known Companies</h2>
+                {% if scored_pairs %}
+                    <ul>{% for p in scored_pairs %}<li class="flag-item {% if p.confidence == 'low' %}low{% endif %}"><b>{{ p.confidence|upper }}</b>: {{ p.company_a }} &harr; {{ p.company_b }}</li>{% endfor %}</ul>
+                {% else %}
+                    <p class="ok">No connections found to other known companies.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="graph-card">
+            <div class="toggle-row">
+                <button class="toggle-btn active" id="btn-focused" onclick="showGraph('focused')">Focused view</button>
+                <button class="toggle-btn" id="btn-full" onclick="showGraph('full')">Full network</button>
+            </div>
+            <iframe id="graph-frame" src="/static/{{ focused_filename }}"></iframe>
+        </div>
+    </div>
+
+    <script>
+        function showGraph(view) {
+            const frame = document.getElementById('graph-frame');
+            if (view === 'focused') {
+                frame.src = '/static/{{ focused_filename }}';
+                document.getElementById('btn-focused').classList.add('active');
+                document.getElementById('btn-full').classList.remove('active');
+            } else {
+                frame.src = '/static/{{ full_filename }}';
+                document.getElementById('btn-full').classList.add('active');
+                document.getElementById('btn-focused').classList.remove('active');
+            }
+        }
+    </script>
+</body>
+</html>
