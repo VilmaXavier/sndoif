@@ -51,11 +51,25 @@ def fingerprint_site(url: str) -> dict[str, Any]:
 
 
 def _get_favicon_hash(base_url: str, html: str) -> str | None:
-    """Find and hash a page's favicon image."""
+    """Find and hash a page's favicon image.
+
+    Handles both normal favicon URLs and inline data: URIs (some sites
+    embed the favicon directly as base64-encoded image data rather
+    than linking to a separate file) -- data URIs are hashed directly
+    without a network fetch, since the image data is already present.
+    """
     soup = BeautifulSoup(html, "html.parser")
 
     icon_tag = soup.find("link", rel=lambda value: value and "icon" in value.lower())
     favicon_path = icon_tag["href"] if icon_tag and icon_tag.get("href") else "/favicon.ico"
+
+    if favicon_path.startswith("data:"):
+        # The actual image bytes are base64-encoded after the comma in
+        # a data URI (e.g. "data:image/svg+xml;base64,PD94bWwg...").
+        # We hash the raw data URI string itself rather than decoding
+        # it -- sufficient for detecting exact reuse across sites,
+        # which is all we need this signal for.
+        return hashlib.sha256(favicon_path.encode("utf-8")).hexdigest()
 
     favicon_url = urljoin(base_url, favicon_path)
 
