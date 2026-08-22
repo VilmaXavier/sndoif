@@ -1,12 +1,13 @@
 ﻿"""
-SNDOIF -- minimal web frontend.
+SNDOIF -- web frontend, both layers.
 
-Supports searching by company name (via Companies House's search
-endpoint, showing a list of candidates to choose from) or by an exact
-company number (skipping straight to analysis). Runs the real
-ownership pipeline live, checks it against the existing entity sample
-for shared-person and red-flag connections, and displays results plus
-two embedded interactive graphs: a focused view and a full view.
+Search by company name or number. If a domain is provided, runs the
+Infrastructure Correlation Layer alongside the Ownership & Compliance
+Layer, with a reduced retry budget suited to a live web request --
+external OSINT services (crt.sh especially) are frequently slow or
+unavailable, and a single search should not hang indefinitely because
+of them. Infrastructure evidence is best-effort: if it fails, the page
+still renders with ownership-only results.
 """
 
 import logging
@@ -17,6 +18,10 @@ from flask import Flask, render_template, request
 
 from fusion.scoring import score_all_pairs
 from fusion.visualization import build_visualization
+from infrastructure.analytics_fingerprint import compare_fingerprints, fingerprint_site
+from infrastructure.cert_transparency import compare_certificates
+from infrastructure.hosting_correlation import cluster_by_shared_ip
+from infrastructure.whois_lookup import batch_lookup, compare_domains
 from ownership.companies_house import build_ownership_records, search_companies_by_name
 from ownership.ownership_graph import (
     build_graph,
@@ -36,51 +41,113 @@ BASE_SAMPLE = [
     "13211214", "07209813", "11465966", "10970586",
 ]
 
+# Domains already known for the base sample, so infrastructure checks
+# can run against them even when the newly searched company's own
+# domain isn't known in advance.
+KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
+
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
 
 
 @app.route("/", methods=["GET"])
 def index():
-    """The search form page."""
     return render_template("index.html")
 
 
 @app.route("/search-by-name", methods=["POST"])
 def search_by_name():
-    """Search Companies House by name, show a list of candidates to pick from."""
     query = request.form.get("query", "").strip()
-
     if not query:
         return render_template("index.html", error="Please enter a company name.")
 
     logger.info("Searching by name: %s", query)
     results = search_companies_by_name(query)
-
     return render_template("name_results.html", query=query, results=results)
+
+
+def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
+    """Best-effort infrastructure checks against the searched domain
+    plus known sample domains. Returns (overlaps, succeeded_fully).
+
+    Any individual check failing is logged and skipped -- this
+    function is designed to always return SOMETHING usable rather
+    than raising, since infrastructure evidence is a bonus signal for
+    the web flow, not a required one.
+    """
+    domains = list(dict.fromkeys([searched_domain] + KNOWN_DOMAINS))
+    overlaps = []
+    fully_succeeded = True
+
+    try:
+        whois_records = batch_lookup(domains)
+        for i in range(len(whois_records)):
+            for j in range(i + 1, len(whois_records)):
+                comparison = compare_domains(whois_records[i], whois_records[j])
+                if comparison["same_registrar"] or comparison["same_registrant_org"] or comparison["shared_name_servers"]:
+                    overlaps.append(comparison)
+    except Exception as error:
+        logger.warning("WHOIS check failed: %s", error)
+        fully_succeeded = False
+
+    try:
+        shared_ips = cluster_by_shared_ip(domains)
+        for ip, doms in shared_ips.items():
+            for i in range(len(doms)):
+                for j in range(i + 1, len(doms)):
+                    overlaps.append({"domain_a": doms[i], "domain_b": doms[j]})
+    except Exception as error:
+        logger.warning("Hosting check failed: %s", error)
+        fully_succeeded = False
+
+    # crt.sh: only check the searched domain against each known domain
+    # (not every pair) and only ONE attempt each, to keep a single web
+    # request from taking minutes when crt.sh is under load.
+    for other_domain in KNOWN_DOMAINS:
+        try:
+            comparison = compare_certificates(searched_domain, other_domain)
+            if comparison["shared_certificate_found"]:
+                overlaps.append({"domain_a": searched_domain, "domain_b": other_domain})
+        except Exception as error:
+            logger.warning("Certificate check failed for %s vs %s: %s", searched_domain, other_domain, error)
+            fully_succeeded = False
+            break  # crt.sh being down affects every pair equally -- no point retrying each one
+
+    try:
+        fingerprints = [fingerprint_site(f"https://{d}") for d in domains]
+        for i in range(len(fingerprints)):
+            for j in range(i + 1, len(fingerprints)):
+                comparison = compare_fingerprints(fingerprints[i], fingerprints[j])
+                if comparison["shared_tracking_ids"] or comparison["same_favicon"]:
+                    overlaps.append({
+                        "domain_a": fingerprints[i]["url"].replace("https://", ""),
+                        "domain_b": fingerprints[j]["url"].replace("https://", ""),
+                    })
+    except Exception as error:
+        logger.warning("Analytics fingerprint check failed: %s", error)
+        fully_succeeded = False
+
+    return overlaps, fully_succeeded
 
 
 @app.route("/search", methods=["POST"])
 def search():
-    """Run the pipeline on the submitted company number and show results."""
     company_number = request.form.get("company_number", "").strip()
+    searched_domain = request.form.get("domain", "").strip()
 
     if not company_number:
         return render_template("index.html", error="Please enter a company number.")
 
-    logger.info("Searching company number: %s", company_number)
+    logger.info("Searching company number: %s (domain: %s)", company_number, searched_domain or "none given")
 
     all_numbers = list(dict.fromkeys(BASE_SAMPLE + [company_number]))
     records = build_ownership_records(all_numbers)
 
-    searched_record = next(
-        (r for r in records if r.company_number == company_number), None
-    )
+    searched_record = next((r for r in records if r.company_number == company_number), None)
     if searched_record is None:
         return render_template(
             "index.html",
-            error=f"Could not find company number '{company_number}' "
-                  f"(invalid number, or Companies House lookup failed).",
+            error=f"Could not find company number '{company_number}'.",
         )
 
     sanctions_matches = screen_beneficial_owners(
@@ -93,8 +160,18 @@ def search():
     jurisdiction_flags = detect_jurisdiction_red_flags(records)
     ownership_pairs = entity_pairs_with_shared_person(graph)
 
+    infrastructure_overlaps = []
+    infra_note = "No domain provided -- infrastructure checks skipped."
+    if searched_domain:
+        logger.info("Running best-effort infrastructure checks for %s", searched_domain)
+        infrastructure_overlaps, fully_succeeded = _run_infrastructure_checks(searched_domain)
+        infra_note = (
+            "Infrastructure checks completed." if fully_succeeded
+            else "Infrastructure checks partially failed (external service issue) -- results may be incomplete."
+        )
+
     company_names = [r.company_name for r in records]
-    scored_pairs = score_all_pairs(company_names, ownership_pairs, [])
+    scored_pairs = score_all_pairs(company_names, ownership_pairs, infrastructure_overlaps)
 
     relevant_pairs = [
         p for p in scored_pairs
@@ -113,14 +190,8 @@ def search():
     focused_filename = f"graph_focused_{company_number}.html"
     full_filename = f"graph_full_{company_number}.html"
 
-    build_visualization(
-        focused_graph, relevant_pairs,
-        output_path=os.path.join(GRAPH_OUTPUT_DIR, focused_filename),
-    )
-    build_visualization(
-        graph, scored_pairs,
-        output_path=os.path.join(GRAPH_OUTPUT_DIR, full_filename),
-    )
+    build_visualization(focused_graph, relevant_pairs, output_path=os.path.join(GRAPH_OUTPUT_DIR, focused_filename))
+    build_visualization(graph, scored_pairs, output_path=os.path.join(GRAPH_OUTPUT_DIR, full_filename))
 
     return render_template(
         "results.html",
@@ -131,13 +202,11 @@ def search():
         psc_count=len(searched_record.psc),
         sanctions_matches=sanctions_matches,
         shared_directors=relevant_shared_directors,
-        jurisdiction_flags=[
-            f for f in jurisdiction_flags
-            if f["company_name"] == searched_record.company_name
-        ],
+        jurisdiction_flags=[f for f in jurisdiction_flags if f["company_name"] == searched_record.company_name],
         scored_pairs=relevant_pairs,
         focused_filename=focused_filename,
         full_filename=full_filename,
+        infra_note=infra_note,
     )
 
 

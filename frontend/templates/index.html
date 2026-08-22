@@ -13,13 +13,13 @@
         h1 { color: var(--navy); margin: 0 0 8px; font-size: 28px; }
         p.subtitle { color: #5a6472; margin: 0 0 28px; line-height: 1.5; }
         label { display: block; font-size: 13px; font-weight: 600; color: #5a6472; margin-bottom: 6px; }
-        input[type=text] { width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid var(--border); border-radius: 8px; }
+        input[type=text] { width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
         input[type=text]:focus { outline: none; border-color: var(--blue); }
-        button { width: 100%; margin-top: 16px; padding: 12px; font-size: 16px; font-weight: 600; background: var(--navy); color: white; border: none; border-radius: 8px; cursor: pointer; }
+        button { width: 100%; margin-top: 4px; padding: 12px; font-size: 16px; font-weight: 600; background: var(--navy); color: white; border: none; border-radius: 8px; cursor: pointer; }
         button:hover { background: var(--blue); }
         .error { background: #fdecea; color: var(--red); padding: 12px 14px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
         .hint { font-size: 12px; color: #8a92a0; margin-top: 8px; }
-        @media (max-width: 480px) { .card { padding: 28px 20px; } h1 { font-size: 24px; } }
+        .divider { text-align: center; color: #8a92a0; font-size: 12px; margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -33,11 +33,18 @@
             <input type="text" id="query" name="query" placeholder="e.g. Deliveroo" required>
             <button type="submit">Search</button>
         </form>
-        <p class="hint">Know the exact Companies House number? <a href="#" onclick="document.getElementById('num-form').style.display='block'; return false;">Search by number instead</a></p>
-        <form method="POST" action="/search" id="num-form" style="display:none; margin-top: 10px;">
-            <input type="text" name="company_number" placeholder="e.g. 09446231" required>
+
+        <div class="divider">or, if you know the exact number</div>
+
+        <form method="POST" action="/search">
+            <label for="company_number">Company number</label>
+            <input type="text" id="company_number" name="company_number" placeholder="e.g. 09446231" required>
+            <label for="domain">Website domain (optional -- enables infrastructure checks)</label>
+            <input type="text" id="domain" name="domain" placeholder="e.g. deliveroo.co.uk">
             <button type="submit">Analyze</button>
         </form>
+        <p class="hint">Domain is used to run WHOIS, certificate, hosting, and tracking-ID
+           checks alongside ownership data. Without it, only ownership evidence is checked.</p>
         {% if error %}
         <p class="error">{{ error }}</p>
         {% endif %}

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -150,7 +150,7 @@
             </div>
 
             <div class="section-card">
-                <h2>Connections to Known Companies</h2>
+                <h2>Connections to Known Companies</h2>{% if infra_note %}<p class="meta" style="margin-bottom:10px;">{{ infra_note }}</p>{% endif %}
                 {% if scored_pairs %}
                     <ul>{% for p in scored_pairs %}<li class="flag-item {% if p.confidence == 'low' %}low{% endif %}"><b>{{ p.confidence|upper }}</b>: {{ p.company_a }} &harr; {{ p.company_b }}</li>{% endfor %}</ul>
                 {% else %}
