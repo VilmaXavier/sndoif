@@ -10,7 +10,8 @@ much stronger than a shared registrar or shared hosting provider alone.
 crt.sh is a free, community-run service and is prone to timeouts and
 502 errors under load, especially for high-traffic domains with many
 historical certificates. get_san_domains() retries with backoff to
-handle this gracefully rather than failing on the first hiccup.
+handle this gracefully, and results are cached since certificate
+history for a domain changes infrequently.
 """
 
 import logging
@@ -19,6 +20,8 @@ from typing import Any
 
 import requests
 
+from infrastructure.cache import cached
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -26,23 +29,22 @@ CRTSH_URL = "https://crt.sh/"
 MAX_RETRIES = 3
 
 
+@cached()
 def get_san_domains(domain: str) -> list[dict[str, Any]]:
     """Fetch certificate records for a domain from crt.sh, including
     every other domain name (SAN) each certificate also covers.
 
     Retries up to MAX_RETRIES times with increasing delays if crt.sh
-    is temporarily overloaded or slow to respond (502/503 errors,
-    read timeouts) -- this is common behaviour for this free service
-    under load, not a sign of a broken domain or query.
+    is temporarily overloaded or slow to respond. Results are cached,
+    since crt.sh has proven unreliable across repeated testing, and
+    certificate history rarely changes within a caching window.
 
     Args:
         domain: A domain name, e.g. "example.com".
 
     Returns:
-        A list of dicts, one per certificate found, each with the
-        certificate's id, issuer name, and the full set of domain
-        names (SANs) it covers -- deduplicated. Returns an empty list
-        if crt.sh still fails after all retries, rather than crashing.
+        A list of dicts, one per certificate found. Returns an empty
+        list if crt.sh still fails after all retries.
     """
     params = {"q": domain, "output": "json"}
 
@@ -52,19 +54,13 @@ def get_san_domains(domain: str) -> list[dict[str, Any]]:
             response.raise_for_status()
             break
         except requests.RequestException as error:
-            # RequestException is the common parent class for every
-            # network-related failure requests can raise -- bad status
-            # codes (HTTPError), timeouts (Timeout), connection drops
-            # (ConnectionError), etc. Catching it here means all of
-            # these trigger the same retry-with-backoff behaviour,
-            # instead of only handling one specific failure type.
             if attempt == MAX_RETRIES:
                 logger.warning(
                     "crt.sh failed for %s after %d attempts: %s",
                     domain, MAX_RETRIES, error,
                 )
                 return []
-            wait_seconds = 2 ** attempt  # 2s, then 4s, then 8s
+            wait_seconds = 2 ** attempt
             logger.info(
                 "crt.sh error for %s (attempt %d/%d), retrying in %ds",
                 domain, attempt, MAX_RETRIES, wait_seconds,
@@ -99,23 +95,8 @@ def get_san_domains(domain: str) -> list[dict[str, Any]]:
 
 
 def compare_certificates(domain_a: str, domain_b: str) -> dict[str, Any]:
-    """Check whether two domains have ever shared a certificate.
-
-    Args:
-        domain_a: First domain to compare.
-        domain_b: Second domain to compare.
-
-    Returns:
-        A dict: {"domain_a", "domain_b", "shared_certificate_found",
-        "shared_domains"}. shared_domains lists every domain name that
-        appeared alongside domain_a or domain_b in an overlapping
-        certificate's SAN list -- i.e. other domains potentially
-        administered by the same party.
-    """
+    """Check whether two domains have ever shared a certificate."""
     certs_a = get_san_domains(domain_a)
-    # Being polite to crt.sh's free public service: a short pause
-    # between requests avoids hammering it, especially important since
-    # we don't have an API key/rate-limit agreement with them at all.
     time.sleep(1)
     certs_b = get_san_domains(domain_b)
 
@@ -133,8 +114,6 @@ def compare_certificates(domain_a: str, domain_b: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Using a smaller/less heavily-certificated domain than google.com
-    # for the single-domain demo, to reduce load on crt.sh's free service.
     domain = "wikimediafoundation.org"
     certs = get_san_domains(domain)
 

@@ -14,14 +14,11 @@ from typing import Any
 
 import whois
 
+from infrastructure.cache import cached
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# WHOIS privacy services redact real data with placeholder strings
-# rather than leaving fields blank. Two domains both showing the exact
-# same placeholder is NOT a match -- it means neither disclosed real
-# data. Treating these as equivalent to missing data prevents this
-# false-positive pattern.
 REDACTION_PLACEHOLDERS = {
     "REDACTED FOR PRIVACY", "DATA REDACTED", "NOT DISCLOSED",
     "PRIVATE", "WHOISGUARD PROTECTED",
@@ -35,8 +32,12 @@ def _is_real_value(value: Any) -> bool:
     return str(value).strip().upper() not in REDACTION_PLACEHOLDERS
 
 
+@cached()
 def _lookup_single_domain(domain: str) -> dict[str, Any]:
-    """Fetch WHOIS data for a single domain, normalized to a plain dict."""
+    """Fetch WHOIS data for a single domain, normalized to a plain dict.
+    Cached, since WHOIS registration facts change infrequently and
+    real WHOIS servers are often slow or rate-limited.
+    """
     record = whois.whois(domain)
 
     def first_if_list(value: Any) -> Any:
@@ -75,9 +76,7 @@ def compare_domains(record_a: dict[str, Any], record_b: dict[str, Any]) -> dict[
     """Compare two WHOIS records for overlap signals.
 
     Fields redacted by WHOIS privacy services (e.g. "REDACTED FOR
-    PRIVACY") are treated as unknown, not as real matching data --
-    two domains both showing the same redaction placeholder is not
-    evidence of a real connection.
+    PRIVACY") are treated as unknown, not as real matching data.
     """
     shared_name_servers = set(record_a["name_servers"]) & set(record_b["name_servers"])
 
@@ -103,8 +102,7 @@ if __name__ == "__main__":
 
     print(f"\nFetched {len(records)} of {len(test_domains)} domains:")
     for record in records:
-        print(f"  {record['domain']}: registrar={record['registrar']!r}, "
-              f"org={record['registrant_org']!r}")
+        print(f"  {record['domain']}: registrar={record['registrar']!r}, org={record['registrant_org']!r}")
 
     print("\nPairwise comparisons:")
     for i in range(len(records)):

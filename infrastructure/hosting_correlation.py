@@ -2,21 +2,22 @@
 Hosting infrastructure correlation: shared IP and subnet detection.
 
 Resolves domains to IP addresses via DNS (free, unlimited, no API key)
-and clusters domains that share an exact IP or the same /24 subnet --
-a signal that they may be hosted on the same server or by the same
-hosting account. Deliberately checks free DNS-based signals first;
-paid enrichment (e.g. Shodan) should only be called on IPs that
-already show overlap here, to conserve limited API credits.
+and clusters domains that share an exact IP or the same /24 subnet.
+Results are cached, since IP assignments change infrequently within a
+caching window and this avoids redundant DNS lookups across searches.
 """
 
 import logging
 import socket
 from typing import Any
 
+from infrastructure.cache import cached
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
+@cached()
 def resolve_domain(domain: str) -> list[str]:
     """Resolve a domain name to its IP address(es) via DNS."""
     try:
