@@ -1,12 +1,14 @@
 ﻿"""
 SNDOIF -- web frontend, both layers.
 
-Search by company name or number. Every successfully searched company
-is added to a persistent, growing "known entities" store -- future
-searches are compared against everyone previously searched, not just
-a fixed starting sample. If a domain is provided, runs the
-Infrastructure Correlation Layer alongside the Ownership & Compliance
-Layer, with a reduced retry budget suited to a live web request.
+Two ways to use it:
+1. Search a single company by name/number -- checked against the
+   growing known-entities set for connections.
+2. Directly compare two specific companies for shared directors,
+   sanctions exposure, and infrastructure overlap.
+
+Every successful single-company search permanently joins the known
+entities store, so the tool's coverage grows over time.
 """
 
 import logging
@@ -48,6 +50,11 @@ def index():
     return render_template("index.html", known_count=known_count)
 
 
+@app.route("/compare", methods=["GET"])
+def compare_form():
+    return render_template("compare.html")
+
+
 @app.route("/search-by-name", methods=["POST"])
 def search_by_name():
     query = request.form.get("query", "").strip()
@@ -57,6 +64,118 @@ def search_by_name():
     logger.info("Searching by name: %s", query)
     results = search_companies_by_name(query)
     return render_template("name_results.html", query=query, results=results)
+
+
+def _run_infrastructure_checks_pair(domain_a: str, domain_b: str) -> tuple[list[str], bool]:
+    """Best-effort infrastructure comparison between exactly two domains."""
+    overlaps = []
+    fully_succeeded = True
+
+    try:
+        records = batch_lookup([domain_a, domain_b])
+        if len(records) == 2:
+            comparison = compare_domains(records[0], records[1])
+            if comparison["same_registrar"]:
+                overlaps.append(f"Same registrar: {records[0]['registrar']}")
+            if comparison["same_registrant_org"]:
+                overlaps.append(f"Same registrant organization: {records[0]['registrant_org']}")
+            if comparison["shared_name_servers"]:
+                overlaps.append(f"Shared name servers: {', '.join(comparison['shared_name_servers'])}")
+    except Exception as error:
+        logger.warning("WHOIS comparison failed: %s", error)
+        fully_succeeded = False
+
+    try:
+        shared_ips = cluster_by_shared_ip([domain_a, domain_b])
+        for ip in shared_ips:
+            overlaps.append(f"Shared IP address: {ip}")
+    except Exception as error:
+        logger.warning("Hosting comparison failed: %s", error)
+        fully_succeeded = False
+
+    try:
+        cert_comparison = compare_certificates(domain_a, domain_b)
+        if cert_comparison["shared_certificate_found"]:
+            overlaps.append(f"Shared SSL certificate covering: {', '.join(cert_comparison['shared_domains'])}")
+    except Exception as error:
+        logger.warning("Certificate comparison failed: %s", error)
+        fully_succeeded = False
+
+    try:
+        fp_a = fingerprint_site(f"https://{domain_a}")
+        fp_b = fingerprint_site(f"https://{domain_b}")
+        fp_comparison = compare_fingerprints(fp_a, fp_b)
+        for tracking_type, ids in fp_comparison["shared_tracking_ids"].items():
+            overlaps.append(f"Shared {tracking_type}: {', '.join(ids)}")
+        if fp_comparison["same_favicon"]:
+            overlaps.append("Identical favicon image")
+    except Exception as error:
+        logger.warning("Analytics comparison failed: %s", error)
+        fully_succeeded = False
+
+    return overlaps, fully_succeeded
+
+
+@app.route("/compare", methods=["POST"])
+def compare():
+    company_a_number = request.form.get("company_a", "").strip()
+    company_b_number = request.form.get("company_b", "").strip()
+    domain_a = request.form.get("domain_a", "").strip()
+    domain_b = request.form.get("domain_b", "").strip()
+
+    if not company_a_number or not company_b_number:
+        return render_template("compare.html", error="Please enter both company numbers.")
+
+    logger.info("Comparing %s vs %s", company_a_number, company_b_number)
+
+    records = build_ownership_records([company_a_number, company_b_number])
+    if len(records) < 2:
+        return render_template("compare.html", error="Could not find one or both company numbers.")
+
+    record_a, record_b = records[0], records[1]
+
+    # Shared people: intersect the officer/PSC names of each company directly.
+    names_a = {o["name"] for o in record_a.officers} | {p["name"] for p in record_a.psc if p.get("name")}
+    names_b = {o["name"] for o in record_b.officers} | {p["name"] for p in record_b.psc if p.get("name")}
+    shared_people = sorted(names_a & names_b)
+
+    sanctions_matches = screen_beneficial_owners(list(names_a | names_b))
+
+    infra_overlaps = []
+    infra_note = None
+    if domain_a and domain_b:
+        infra_overlaps, fully_succeeded = _run_infrastructure_checks_pair(domain_a, domain_b)
+        if not fully_succeeded:
+            infra_note = "Some infrastructure checks failed (external service issue) -- results may be incomplete."
+    else:
+        infra_note = "No domains provided -- infrastructure checks skipped."
+
+    has_ownership_evidence = len(shared_people) > 0
+    has_infrastructure_evidence = len(infra_overlaps) > 0
+
+    if has_ownership_evidence and has_infrastructure_evidence:
+        confidence = "high"
+    elif has_ownership_evidence or has_infrastructure_evidence:
+        confidence = "low"
+    else:
+        confidence = "none"
+
+    # Both compared companies also join the known-entities set, same
+    # as single-company searches -- they were successfully verified
+    # to exist, so future searches benefit from knowing about them too.
+    add_known_company(company_a_number)
+    add_known_company(company_b_number)
+
+    return render_template(
+        "compare_results.html",
+        company_a_name=record_a.company_name,
+        company_b_name=record_b.company_name,
+        shared_people=shared_people,
+        sanctions_matches=sanctions_matches,
+        infra_overlaps=infra_overlaps,
+        infra_note=infra_note,
+        confidence=confidence,
+    )
 
 
 def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
@@ -130,8 +249,6 @@ def search():
     if searched_record is None:
         return render_template("index.html", error=f"Could not find company number '{company_number}'.", known_count=len(known_companies))
 
-    # A successful lookup means this company is now genuinely part of
-    # the known set for all future searches -- the case file grows.
     add_known_company(company_number)
 
     sanctions_matches = screen_beneficial_owners(
