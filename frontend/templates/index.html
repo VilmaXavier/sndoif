@@ -11,7 +11,8 @@
         .card { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(26, 43, 76, 0.08); padding: 40px; max-width: 480px; width: 100%; }
         .badge { display: inline-block; background: var(--light-blue); color: var(--navy); font-size: 12px; font-weight: 600; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 20px; margin-bottom: 12px; }
         h1 { color: var(--navy); margin: 0 0 8px; font-size: 28px; }
-        p.subtitle { color: #5a6472; margin: 0 0 28px; line-height: 1.5; }
+        p.subtitle { color: #5a6472; margin: 0 0 20px; line-height: 1.5; }
+        .known-count { font-size: 13px; color: var(--blue); font-weight: 600; margin-bottom: 20px; }
         label { display: block; font-size: 13px; font-weight: 600; color: #5a6472; margin-bottom: 6px; }
         input[type=text] { width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
         input[type=text]:focus { outline: none; border-color: var(--blue); }
@@ -37,7 +38,8 @@
         <span class="badge">SNDOIF</span>
         <h1>Shell Network Detection</h1>
         <p class="subtitle">Search for a UK company by name to check ownership,
-           sanctions exposure, and network connections against the known entity sample.</p>
+           sanctions exposure, and network connections.</p>
+        <p class="known-count">Comparing against {{ known_count }} known companies -- every search grows this set.</p>
         <form method="POST" action="/search-by-name">
             <label for="query">Company name</label>
             <input type="text" id="query" name="query" placeholder="e.g. Deliveroo" required>

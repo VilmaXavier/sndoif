@@ -14,3 +14,5 @@ __pycache__/
 data/
 
 frontend/static/
+
+known_entities.json

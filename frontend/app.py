@@ -1,11 +1,12 @@
 ﻿"""
 SNDOIF -- web frontend, both layers.
 
-Search by company name or number. If a domain is provided, runs the
+Search by company name or number. Every successfully searched company
+is added to a persistent, growing "known entities" store -- future
+searches are compared against everyone previously searched, not just
+a fixed starting sample. If a domain is provided, runs the
 Infrastructure Correlation Layer alongside the Ownership & Compliance
 Layer, with a reduced retry budget suited to a live web request.
-Infrastructure evidence is best-effort: if it fails, the page still
-renders with ownership-only results.
 """
 
 import logging
@@ -21,6 +22,7 @@ from infrastructure.cert_transparency import compare_certificates
 from infrastructure.hosting_correlation import cluster_by_shared_ip
 from infrastructure.whois_lookup import batch_lookup, compare_domains
 from ownership.companies_house import build_ownership_records, search_companies_by_name
+from ownership.entity_store import add_known_company, load_known_companies
 from ownership.ownership_graph import (
     build_graph,
     detect_jurisdiction_red_flags,
@@ -34,20 +36,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-BASE_SAMPLE = [
-    "09446231",  # Monzo Bank Limited
-    "08804411",  # Revolut Ltd
-    "00000006",  # Marine and General Mutual Life Assurance Society (dissolved, old)
-    "13211214",  # Wise Plc
-    "07209813",  # Wise Payments Limited
-    "11465966",  # Deliveroo International Ltd
-    "10970586",  # Deliveroo SP Ltd
-    "13227665",  # Deliveroo Limited (parent/holding)
-    "09092149",  # Starling Bank Limited
-    "07098618",  # Ocado Group Plc
-    "03875000",  # Ocado Retail Limited (JV with Marks & Spencer)
-]
-
 KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
 
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -56,14 +44,15 @@ os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    known_count = len(load_known_companies())
+    return render_template("index.html", known_count=known_count)
 
 
 @app.route("/search-by-name", methods=["POST"])
 def search_by_name():
     query = request.form.get("query", "").strip()
     if not query:
-        return render_template("index.html", error="Please enter a company name.")
+        return render_template("index.html", error="Please enter a company name.", known_count=len(load_known_companies()))
 
     logger.info("Searching by name: %s", query)
     results = search_companies_by_name(query)
@@ -129,16 +118,21 @@ def search():
     searched_domain = request.form.get("domain", "").strip()
 
     if not company_number:
-        return render_template("index.html", error="Please enter a company number.")
+        return render_template("index.html", error="Please enter a company number.", known_count=len(load_known_companies()))
 
     logger.info("Searching company number: %s (domain: %s)", company_number, searched_domain or "none given")
 
-    all_numbers = list(dict.fromkeys(BASE_SAMPLE + [company_number]))
+    known_companies = load_known_companies()
+    all_numbers = list(dict.fromkeys(known_companies + [company_number]))
     records = build_ownership_records(all_numbers)
 
     searched_record = next((r for r in records if r.company_number == company_number), None)
     if searched_record is None:
-        return render_template("index.html", error=f"Could not find company number '{company_number}'.")
+        return render_template("index.html", error=f"Could not find company number '{company_number}'.", known_count=len(known_companies))
+
+    # A successful lookup means this company is now genuinely part of
+    # the known set for all future searches -- the case file grows.
+    add_known_company(company_number)
 
     sanctions_matches = screen_beneficial_owners(
         [o["name"] for o in searched_record.officers]
@@ -191,6 +185,7 @@ def search():
         focused_filename=focused_filename,
         full_filename=full_filename,
         infra_note=infra_note,
+        known_count=len(all_numbers),
     )
 
 
