@@ -1,10 +1,9 @@
-"""
+﻿"""
 End-to-end pipeline entry point for the Ownership & Compliance Layer.
 
 Runs the full chain: fetch ownership data from Companies House, screen
 officers/PSCs against OFAC sanctions data, build the ownership graph,
-and report red flags. This is the script your teammate's fusion layer
-will eventually call into (or you'll export this data for them).
+and report red flags.
 """
 
 import logging
@@ -21,8 +20,6 @@ from ownership.sanctions_check import screen_beneficial_owners
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Your real entity sample. Start small and verified; grow toward your
-# full 10-15 as you confirm more company numbers with your teammate.
 COMPANY_SAMPLE = [
     "09446231",  # Monzo Bank Limited
     "08804411",  # Revolut Ltd
@@ -31,15 +28,18 @@ COMPANY_SAMPLE = [
     "07209813",  # Wise Payments Limited
     "11465966",  # Deliveroo International Ltd
     "10970586",  # Deliveroo SP Ltd
+    "13227665",  # Deliveroo Limited (parent/holding)
+    "09092149",  # Starling Bank Limited
+    "07098618",  # Ocado Group Plc
+    "03875000",  # Ocado Retail Limited (JV with Marks & Spencer)
 ]
+
 
 def main() -> None:
     """Run the full ownership & compliance pipeline on the sample."""
     logger.info("Building ownership records for %d companies", len(COMPANY_SAMPLE))
     records = build_ownership_records(COMPANY_SAMPLE)
 
-    # Gather every officer/PSC name across the whole sample, so we
-    # screen once against sanctions data rather than repeatedly.
     all_names: list[str] = []
     for record in records:
         all_names.extend(officer["name"] for officer in record.officers)
@@ -80,7 +80,7 @@ def main() -> None:
         print(f"  - {flag['company_name']}: PSC {flag['psc_name']} registered in {flag['jurisdiction']}")
 
     print(f"\nEntity pairs sharing a person (for fusion handoff): {len(shared_pairs)}")
-    for pair in shared_pairs[:10]:  # just preview the first 10
+    for pair in shared_pairs:
         print(f"  - {pair['company_a']} <-> {pair['company_b']} via {pair['shared_person']}")
 
 

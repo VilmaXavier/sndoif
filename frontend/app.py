@@ -3,11 +3,9 @@ SNDOIF -- web frontend, both layers.
 
 Search by company name or number. If a domain is provided, runs the
 Infrastructure Correlation Layer alongside the Ownership & Compliance
-Layer, with a reduced retry budget suited to a live web request --
-external OSINT services (crt.sh especially) are frequently slow or
-unavailable, and a single search should not hang indefinitely because
-of them. Infrastructure evidence is best-effort: if it fails, the page
-still renders with ownership-only results.
+Layer, with a reduced retry budget suited to a live web request.
+Infrastructure evidence is best-effort: if it fails, the page still
+renders with ownership-only results.
 """
 
 import logging
@@ -37,13 +35,19 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 BASE_SAMPLE = [
-    "09446231", "08804411", "00000006",
-    "13211214", "07209813", "11465966", "10970586",
+    "09446231",  # Monzo Bank Limited
+    "08804411",  # Revolut Ltd
+    "00000006",  # Marine and General Mutual Life Assurance Society (dissolved, old)
+    "13211214",  # Wise Plc
+    "07209813",  # Wise Payments Limited
+    "11465966",  # Deliveroo International Ltd
+    "10970586",  # Deliveroo SP Ltd
+    "13227665",  # Deliveroo Limited (parent/holding)
+    "09092149",  # Starling Bank Limited
+    "07098618",  # Ocado Group Plc
+    "03875000",  # Ocado Retail Limited (JV with Marks & Spencer)
 ]
 
-# Domains already known for the base sample, so infrastructure checks
-# can run against them even when the newly searched company's own
-# domain isn't known in advance.
 KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
 
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -67,14 +71,6 @@ def search_by_name():
 
 
 def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
-    """Best-effort infrastructure checks against the searched domain
-    plus known sample domains. Returns (overlaps, succeeded_fully).
-
-    Any individual check failing is logged and skipped -- this
-    function is designed to always return SOMETHING usable rather
-    than raising, since infrastructure evidence is a bonus signal for
-    the web flow, not a required one.
-    """
     domains = list(dict.fromkeys([searched_domain] + KNOWN_DOMAINS))
     overlaps = []
     fully_succeeded = True
@@ -100,9 +96,6 @@ def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
         logger.warning("Hosting check failed: %s", error)
         fully_succeeded = False
 
-    # crt.sh: only check the searched domain against each known domain
-    # (not every pair) and only ONE attempt each, to keep a single web
-    # request from taking minutes when crt.sh is under load.
     for other_domain in KNOWN_DOMAINS:
         try:
             comparison = compare_certificates(searched_domain, other_domain)
@@ -111,7 +104,7 @@ def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
         except Exception as error:
             logger.warning("Certificate check failed for %s vs %s: %s", searched_domain, other_domain, error)
             fully_succeeded = False
-            break  # crt.sh being down affects every pair equally -- no point retrying each one
+            break
 
     try:
         fingerprints = [fingerprint_site(f"https://{d}") for d in domains]
@@ -145,10 +138,7 @@ def search():
 
     searched_record = next((r for r in records if r.company_number == company_number), None)
     if searched_record is None:
-        return render_template(
-            "index.html",
-            error=f"Could not find company number '{company_number}'.",
-        )
+        return render_template("index.html", error=f"Could not find company number '{company_number}'.")
 
     sanctions_matches = screen_beneficial_owners(
         [o["name"] for o in searched_record.officers]
@@ -173,14 +163,8 @@ def search():
     company_names = [r.company_name for r in records]
     scored_pairs = score_all_pairs(company_names, ownership_pairs, infrastructure_overlaps)
 
-    relevant_pairs = [
-        p for p in scored_pairs
-        if searched_record.company_name in (p["company_a"], p["company_b"])
-    ]
-    relevant_shared_directors = [
-        f for f in red_flags["shared_directors"]
-        if searched_record.company_name in f["companies"]
-    ]
+    relevant_pairs = [p for p in scored_pairs if searched_record.company_name in (p["company_a"], p["company_b"])]
+    relevant_shared_directors = [f for f in red_flags["shared_directors"] if searched_record.company_name in f["companies"]]
 
     if searched_record.company_name in graph:
         focused_graph = nx.ego_graph(graph, searched_record.company_name, radius=2, undirected=True)
