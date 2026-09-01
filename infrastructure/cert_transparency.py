@@ -1,4 +1,4 @@
-﻿"""
+"""
 Certificate Transparency (CT) log lookups via crt.sh.
 
 Detects SSL certificate reuse across domains: if two domains have ever
@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 CRTSH_URL = "https://crt.sh/"
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 
 
 @cached()

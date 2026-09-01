@@ -9,10 +9,17 @@ Two ways to use it:
 
 Every successful single-company search permanently joins the known
 entities store, so the tool's coverage grows over time.
+
+Infrastructure checks (WHOIS, certificates, hosting, analytics) run
+concurrently via a thread pool, since they are independent network
+calls -- this cuts total wait time from the sum of all checks down to
+roughly the slowest single check, since each I/O-bound thread can be
+waiting on its own network response at the same time as the others.
 """
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import networkx as nx
 from flask import Flask, render_template, request
@@ -66,52 +73,78 @@ def search_by_name():
     return render_template("name_results.html", query=query, results=results)
 
 
+def _whois_check_pair(domain_a: str, domain_b: str) -> list[str]:
+    findings = []
+    records = batch_lookup([domain_a, domain_b])
+    if len(records) == 2:
+        comparison = compare_domains(records[0], records[1])
+        if comparison["same_registrar"]:
+            findings.append(f"Same registrar: {records[0]['registrar']}")
+        if comparison["same_registrant_org"]:
+            findings.append(f"Same registrant organization: {records[0]['registrant_org']}")
+        if comparison["shared_name_servers"]:
+            findings.append(f"Shared name servers: {', '.join(comparison['shared_name_servers'])}")
+    return findings
+
+
+def _hosting_check_pair(domain_a: str, domain_b: str) -> list[str]:
+    findings = []
+    shared_ips = cluster_by_shared_ip([domain_a, domain_b])
+    for ip in shared_ips:
+        findings.append(f"Shared IP address: {ip}")
+    return findings
+
+
+def _cert_check_pair(domain_a: str, domain_b: str) -> list[str]:
+    findings = []
+    comparison = compare_certificates(domain_a, domain_b)
+    if comparison["shared_certificate_found"]:
+        findings.append(f"Shared SSL certificate covering: {', '.join(comparison['shared_domains'])}")
+    return findings
+
+
+def _analytics_check_pair(domain_a: str, domain_b: str) -> list[str]:
+    findings = []
+    fp_a = fingerprint_site(f"https://{domain_a}")
+    fp_b = fingerprint_site(f"https://{domain_b}")
+    comparison = compare_fingerprints(fp_a, fp_b)
+    for tracking_type, ids in comparison["shared_tracking_ids"].items():
+        findings.append(f"Shared {tracking_type}: {', '.join(ids)}")
+    if comparison["same_favicon"]:
+        findings.append("Identical favicon image")
+    return findings
+
+
 def _run_infrastructure_checks_pair(domain_a: str, domain_b: str) -> tuple[list[str], bool]:
-    """Best-effort infrastructure comparison between exactly two domains."""
+    """Run all four infrastructure checks concurrently for a domain pair.
+
+    Each check is an independent network operation, so running them in
+    parallel threads means the total wait is roughly the duration of
+    the SLOWEST check (usually crt.sh), not the sum of all four --
+    a significant speedup for a live web request.
+    """
+    checks = {
+        "whois": _whois_check_pair,
+        "hosting": _hosting_check_pair,
+        "certificates": _cert_check_pair,
+        "analytics": _analytics_check_pair,
+    }
+
     overlaps = []
     fully_succeeded = True
 
-    try:
-        records = batch_lookup([domain_a, domain_b])
-        if len(records) == 2:
-            comparison = compare_domains(records[0], records[1])
-            if comparison["same_registrar"]:
-                overlaps.append(f"Same registrar: {records[0]['registrar']}")
-            if comparison["same_registrant_org"]:
-                overlaps.append(f"Same registrant organization: {records[0]['registrant_org']}")
-            if comparison["shared_name_servers"]:
-                overlaps.append(f"Shared name servers: {', '.join(comparison['shared_name_servers'])}")
-    except Exception as error:
-        logger.warning("WHOIS comparison failed: %s", error)
-        fully_succeeded = False
-
-    try:
-        shared_ips = cluster_by_shared_ip([domain_a, domain_b])
-        for ip in shared_ips:
-            overlaps.append(f"Shared IP address: {ip}")
-    except Exception as error:
-        logger.warning("Hosting comparison failed: %s", error)
-        fully_succeeded = False
-
-    try:
-        cert_comparison = compare_certificates(domain_a, domain_b)
-        if cert_comparison["shared_certificate_found"]:
-            overlaps.append(f"Shared SSL certificate covering: {', '.join(cert_comparison['shared_domains'])}")
-    except Exception as error:
-        logger.warning("Certificate comparison failed: %s", error)
-        fully_succeeded = False
-
-    try:
-        fp_a = fingerprint_site(f"https://{domain_a}")
-        fp_b = fingerprint_site(f"https://{domain_b}")
-        fp_comparison = compare_fingerprints(fp_a, fp_b)
-        for tracking_type, ids in fp_comparison["shared_tracking_ids"].items():
-            overlaps.append(f"Shared {tracking_type}: {', '.join(ids)}")
-        if fp_comparison["same_favicon"]:
-            overlaps.append("Identical favicon image")
-    except Exception as error:
-        logger.warning("Analytics comparison failed: %s", error)
-        fully_succeeded = False
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_name = {
+            executor.submit(func, domain_a, domain_b): name
+            for name, func in checks.items()
+        }
+        for future in as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                overlaps.extend(future.result())
+            except Exception as error:
+                logger.warning("%s check failed: %s", name, error)
+                fully_succeeded = False
 
     return overlaps, fully_succeeded
 
@@ -134,7 +167,6 @@ def compare():
 
     record_a, record_b = records[0], records[1]
 
-    # Shared people: intersect the officer/PSC names of each company directly.
     names_a = {o["name"] for o in record_a.officers} | {p["name"] for p in record_a.psc if p.get("name")}
     names_b = {o["name"] for o in record_b.officers} | {p["name"] for p in record_b.psc if p.get("name")}
     shared_people = sorted(names_a & names_b)
@@ -160,9 +192,6 @@ def compare():
     else:
         confidence = "none"
 
-    # Both compared companies also join the known-entities set, same
-    # as single-company searches -- they were successfully verified
-    # to exist, so future searches benefit from knowing about them too.
     add_known_company(company_a_number)
     add_known_company(company_b_number)
 
@@ -179,54 +208,60 @@ def compare():
 
 
 def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
+    """Best-effort infrastructure checks against the searched domain
+    plus known sample domains, run concurrently across domain pairs.
+    """
     domains = list(dict.fromkeys([searched_domain] + KNOWN_DOMAINS))
     overlaps = []
     fully_succeeded = True
 
-    try:
+    def whois_and_hosting():
+        results = []
         whois_records = batch_lookup(domains)
         for i in range(len(whois_records)):
             for j in range(i + 1, len(whois_records)):
                 comparison = compare_domains(whois_records[i], whois_records[j])
                 if comparison["same_registrar"] or comparison["same_registrant_org"] or comparison["shared_name_servers"]:
-                    overlaps.append(comparison)
-    except Exception as error:
-        logger.warning("WHOIS check failed: %s", error)
-        fully_succeeded = False
-
-    try:
+                    results.append(comparison)
         shared_ips = cluster_by_shared_ip(domains)
         for ip, doms in shared_ips.items():
             for i in range(len(doms)):
                 for j in range(i + 1, len(doms)):
-                    overlaps.append({"domain_a": doms[i], "domain_b": doms[j]})
-    except Exception as error:
-        logger.warning("Hosting check failed: %s", error)
-        fully_succeeded = False
+                    results.append({"domain_a": doms[i], "domain_b": doms[j]})
+        return results
 
-    for other_domain in KNOWN_DOMAINS:
-        try:
+    def certificates():
+        results = []
+        for other_domain in KNOWN_DOMAINS:
             comparison = compare_certificates(searched_domain, other_domain)
             if comparison["shared_certificate_found"]:
-                overlaps.append({"domain_a": searched_domain, "domain_b": other_domain})
-        except Exception as error:
-            logger.warning("Certificate check failed for %s vs %s: %s", searched_domain, other_domain, error)
-            fully_succeeded = False
-            break
+                results.append({"domain_a": searched_domain, "domain_b": other_domain})
+        return results
 
-    try:
+    def analytics():
+        results = []
         fingerprints = [fingerprint_site(f"https://{d}") for d in domains]
         for i in range(len(fingerprints)):
             for j in range(i + 1, len(fingerprints)):
                 comparison = compare_fingerprints(fingerprints[i], fingerprints[j])
                 if comparison["shared_tracking_ids"] or comparison["same_favicon"]:
-                    overlaps.append({
+                    results.append({
                         "domain_a": fingerprints[i]["url"].replace("https://", ""),
                         "domain_b": fingerprints[j]["url"].replace("https://", ""),
                     })
-    except Exception as error:
-        logger.warning("Analytics fingerprint check failed: %s", error)
-        fully_succeeded = False
+        return results
+
+    checks = {"whois_hosting": whois_and_hosting, "certificates": certificates, "analytics": analytics}
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_name = {executor.submit(func): name for name, func in checks.items()}
+        for future in as_completed(future_to_name):
+            name = future_to_name[future]
+            try:
+                overlaps.extend(future.result())
+            except Exception as error:
+                logger.warning("%s check failed: %s", name, error)
+                fully_succeeded = False
 
     return overlaps, fully_succeeded
 
