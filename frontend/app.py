@@ -4,10 +4,11 @@ SNDOIF -- web frontend, both layers.
 
 import logging
 import os
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import networkx as nx
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 
 from fusion.scoring import score_all_pairs
 from fusion.visualization import build_visualization
@@ -24,6 +25,7 @@ from ownership.ownership_graph import (
     detect_red_flags,
     entity_pairs_with_shared_person,
 )
+from ownership.report_export import build_comparison_pdf
 from ownership.sanctions_check import screen_beneficial_owners
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -35,6 +37,12 @@ KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
 
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
+
+# Temporary in-memory store for the most recent comparison results,
+# keyed by a random ID, so the PDF export button can format an
+# already-computed result instantly instead of re-running the entire
+# pipeline just to generate a downloadable file.
+COMPARISON_RESULTS: dict[str, dict] = {}
 
 
 @app.route("/", methods=["GET"])
@@ -162,13 +170,6 @@ def compare():
     infra_note = None
     if domain_a and domain_b:
         if domain_a.lower().strip() == domain_b.lower().strip():
-            # A same-domain comparison is meaningless -- it will
-            # trivially "match" on everything (same IP, same
-            # certificate, same favicon) regardless of whether the two
-            # companies are actually related. This can happen
-            # innocently if a domain-guess heuristic returns the same
-            # domain for two different but related companies (e.g. a
-            # parent and sibling sharing a consumer-facing brand site).
             infra_note = (
                 f"Both companies resolved to the same domain ({domain_a}) -- "
                 f"infrastructure checks skipped, since comparing a domain to "
@@ -195,6 +196,17 @@ def compare():
     add_known_company(company_a_number)
     add_known_company(company_b_number)
 
+    result_id = str(uuid.uuid4())
+    COMPARISON_RESULTS[result_id] = {
+        "company_a_name": record_a.company_name,
+        "company_b_name": record_b.company_name,
+        "confidence": confidence,
+        "shared_people": shared_people,
+        "sanctions_matches": sanctions_matches,
+        "infra_overlaps": infra_overlaps,
+        "infra_note": infra_note,
+    }
+
     return render_template(
         "compare_results.html",
         company_a_name=record_a.company_name,
@@ -204,7 +216,24 @@ def compare():
         infra_overlaps=infra_overlaps,
         infra_note=infra_note,
         confidence=confidence,
+        result_id=result_id,
     )
+
+
+@app.route("/compare/export/<result_id>", methods=["GET"])
+def export_comparison_pdf(result_id):
+    """Format an already-computed comparison result as a downloadable
+    PDF -- instant, since it reuses stored results rather than
+    re-running the pipeline.
+    """
+    result = COMPARISON_RESULTS.get(result_id)
+    if result is None:
+        return "Report not found or expired -- please run the comparison again.", 404
+
+    output_path = os.path.join(GRAPH_OUTPUT_DIR, f"comparison_{result_id}.pdf")
+    build_comparison_pdf(output_path, **result)
+
+    return send_file(output_path, as_attachment=True, download_name="sndoif_comparison_report.pdf")
 
 
 def _run_infrastructure_checks(searched_domain):
