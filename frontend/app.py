@@ -1,20 +1,5 @@
 ﻿"""
 SNDOIF -- web frontend, both layers.
-
-Two ways to use it:
-1. Search a single company by name/number -- checked against the
-   growing known-entities set for connections.
-2. Directly compare two specific companies for shared directors,
-   sanctions exposure, and infrastructure overlap.
-
-Every successful single-company search permanently joins the known
-entities store, so the tool's coverage grows over time.
-
-Infrastructure checks (WHOIS, certificates, hosting, analytics) run
-concurrently via a thread pool, since they are independent network
-calls -- this cuts total wait time from the sum of all checks down to
-roughly the slowest single check, since each I/O-bound thread can be
-waiting on its own network response at the same time as the others.
 """
 
 import logging
@@ -22,7 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import networkx as nx
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
 
 from fusion.scoring import score_all_pairs
 from fusion.visualization import build_visualization
@@ -31,6 +16,7 @@ from infrastructure.cert_transparency import compare_certificates
 from infrastructure.hosting_correlation import cluster_by_shared_ip
 from infrastructure.whois_lookup import batch_lookup, compare_domains
 from ownership.companies_house import build_ownership_records, search_companies_by_name
+from ownership.domain_guesser import guess_domains
 from ownership.entity_store import add_known_company, load_known_companies
 from ownership.ownership_graph import (
     build_graph,
@@ -62,6 +48,20 @@ def compare_form():
     return render_template("compare.html")
 
 
+@app.route("/guess-domain", methods=["POST"])
+def guess_domain_endpoint():
+    company_number = request.json.get("company_number", "").strip()
+    if not company_number:
+        return jsonify({"domains": []})
+
+    records = build_ownership_records([company_number])
+    if not records:
+        return jsonify({"domains": []})
+
+    domains = guess_domains(records[0].company_name)
+    return jsonify({"domains": domains})
+
+
 @app.route("/search-by-name", methods=["POST"])
 def search_by_name():
     query = request.form.get("query", "").strip()
@@ -73,7 +73,7 @@ def search_by_name():
     return render_template("name_results.html", query=query, results=results)
 
 
-def _whois_check_pair(domain_a: str, domain_b: str) -> list[str]:
+def _whois_check_pair(domain_a, domain_b):
     findings = []
     records = batch_lookup([domain_a, domain_b])
     if len(records) == 2:
@@ -87,7 +87,7 @@ def _whois_check_pair(domain_a: str, domain_b: str) -> list[str]:
     return findings
 
 
-def _hosting_check_pair(domain_a: str, domain_b: str) -> list[str]:
+def _hosting_check_pair(domain_a, domain_b):
     findings = []
     shared_ips = cluster_by_shared_ip([domain_a, domain_b])
     for ip in shared_ips:
@@ -95,7 +95,7 @@ def _hosting_check_pair(domain_a: str, domain_b: str) -> list[str]:
     return findings
 
 
-def _cert_check_pair(domain_a: str, domain_b: str) -> list[str]:
+def _cert_check_pair(domain_a, domain_b):
     findings = []
     comparison = compare_certificates(domain_a, domain_b)
     if comparison["shared_certificate_found"]:
@@ -103,7 +103,7 @@ def _cert_check_pair(domain_a: str, domain_b: str) -> list[str]:
     return findings
 
 
-def _analytics_check_pair(domain_a: str, domain_b: str) -> list[str]:
+def _analytics_check_pair(domain_a, domain_b):
     findings = []
     fp_a = fingerprint_site(f"https://{domain_a}")
     fp_b = fingerprint_site(f"https://{domain_b}")
@@ -115,29 +115,15 @@ def _analytics_check_pair(domain_a: str, domain_b: str) -> list[str]:
     return findings
 
 
-def _run_infrastructure_checks_pair(domain_a: str, domain_b: str) -> tuple[list[str], bool]:
-    """Run all four infrastructure checks concurrently for a domain pair.
-
-    Each check is an independent network operation, so running them in
-    parallel threads means the total wait is roughly the duration of
-    the SLOWEST check (usually crt.sh), not the sum of all four --
-    a significant speedup for a live web request.
-    """
+def _run_infrastructure_checks_pair(domain_a, domain_b):
     checks = {
-        "whois": _whois_check_pair,
-        "hosting": _hosting_check_pair,
-        "certificates": _cert_check_pair,
-        "analytics": _analytics_check_pair,
+        "whois": _whois_check_pair, "hosting": _hosting_check_pair,
+        "certificates": _cert_check_pair, "analytics": _analytics_check_pair,
     }
-
     overlaps = []
     fully_succeeded = True
-
     with ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_name = {
-            executor.submit(func, domain_a, domain_b): name
-            for name, func in checks.items()
-        }
+        future_to_name = {executor.submit(func, domain_a, domain_b): name for name, func in checks.items()}
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             try:
@@ -145,7 +131,6 @@ def _run_infrastructure_checks_pair(domain_a: str, domain_b: str) -> tuple[list[
             except Exception as error:
                 logger.warning("%s check failed: %s", name, error)
                 fully_succeeded = False
-
     return overlaps, fully_succeeded
 
 
@@ -176,9 +161,24 @@ def compare():
     infra_overlaps = []
     infra_note = None
     if domain_a and domain_b:
-        infra_overlaps, fully_succeeded = _run_infrastructure_checks_pair(domain_a, domain_b)
-        if not fully_succeeded:
-            infra_note = "Some infrastructure checks failed (external service issue) -- results may be incomplete."
+        if domain_a.lower().strip() == domain_b.lower().strip():
+            # A same-domain comparison is meaningless -- it will
+            # trivially "match" on everything (same IP, same
+            # certificate, same favicon) regardless of whether the two
+            # companies are actually related. This can happen
+            # innocently if a domain-guess heuristic returns the same
+            # domain for two different but related companies (e.g. a
+            # parent and sibling sharing a consumer-facing brand site).
+            infra_note = (
+                f"Both companies resolved to the same domain ({domain_a}) -- "
+                f"infrastructure checks skipped, since comparing a domain to "
+                f"itself would trivially match on everything. Verify the "
+                f"domains are correct for each specific company."
+            )
+        else:
+            infra_overlaps, fully_succeeded = _run_infrastructure_checks_pair(domain_a, domain_b)
+            if not fully_succeeded:
+                infra_note = "Some infrastructure checks failed (external service issue) -- results may be incomplete."
     else:
         infra_note = "No domains provided -- infrastructure checks skipped."
 
@@ -207,10 +207,7 @@ def compare():
     )
 
 
-def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
-    """Best-effort infrastructure checks against the searched domain
-    plus known sample domains, run concurrently across domain pairs.
-    """
+def _run_infrastructure_checks(searched_domain):
     domains = list(dict.fromkeys([searched_domain] + KNOWN_DOMAINS))
     overlaps = []
     fully_succeeded = True
@@ -252,7 +249,6 @@ def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
         return results
 
     checks = {"whois_hosting": whois_and_hosting, "certificates": certificates, "analytics": analytics}
-
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_to_name = {executor.submit(func): name for name, func in checks.items()}
         for future in as_completed(future_to_name):
@@ -262,7 +258,6 @@ def _run_infrastructure_checks(searched_domain: str) -> tuple[list[dict], bool]:
             except Exception as error:
                 logger.warning("%s check failed: %s", name, error)
                 fully_succeeded = False
-
     return overlaps, fully_succeeded
 
 

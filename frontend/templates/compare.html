@@ -15,8 +15,12 @@
         label { display: block; font-size: 13px; font-weight: 600; color: #5a6472; margin-bottom: 6px; }
         input[type=text] { width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid var(--border); border-radius: 8px; }
         input[type=text]:focus { outline: none; border-color: var(--blue); }
-        button { width: 100%; margin-top: 6px; padding: 12px; font-size: 16px; font-weight: 600; background: var(--navy); color: white; border: none; border-radius: 8px; cursor: pointer; }
-        button:hover { background: var(--blue); }
+        .guess-btn {
+            font-size: 11px; color: var(--blue); background: none; border: none; cursor: pointer;
+            padding: 2px 0; text-decoration: underline; width: auto; margin-top: 4px;
+        }
+        button[type=submit] { width: 100%; margin-top: 6px; padding: 12px; font-size: 16px; font-weight: 600; background: var(--navy); color: white; border: none; border-radius: 8px; cursor: pointer; }
+        button[type=submit]:hover { background: var(--blue); }
         .error { background: #fdecea; color: var(--red); padding: 12px 14px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
         .back { display: inline-block; color: var(--blue); text-decoration: none; font-size: 14px; font-weight: 600; margin-bottom: 16px; }
         #loading-overlay {
@@ -34,7 +38,7 @@
         <h1>Compare Two Companies</h1>
         <p class="subtitle">Check whether two specific UK companies are connected --
            shared directors/PSCs, sanctions exposure, and (if domains are given) infrastructure overlap.</p>
-        <form method="POST" action="/compare">
+        <form method="POST" action="/compare" id="compare-form">
             <div class="pair">
                 <div>
                     <label for="company_a">Company A number</label>
@@ -49,10 +53,12 @@
                 <div>
                     <label for="domain_a">Domain A (optional)</label>
                     <input type="text" id="domain_a" name="domain_a" placeholder="e.g. monzo.com">
+                    <button type="button" class="guess-btn" onclick="guessDomain('company_a', 'domain_a')">Guess domain &rarr;</button>
                 </div>
                 <div>
                     <label for="domain_b">Domain B (optional)</label>
                     <input type="text" id="domain_b" name="domain_b" placeholder="e.g. starlingbank.com">
+                    <button type="button" class="guess-btn" onclick="guessDomain('company_b', 'domain_b')">Guess domain &rarr;</button>
                 </div>
             </div>
             <button type="submit">Compare</button>
@@ -67,11 +73,38 @@
         <p style="margin-top:20px; font-size:16px; max-width:320px;">Comparing both companies across ownership and infrastructure sources. This can take up to a minute.</p>
     </div>
     <script>
-        document.querySelectorAll("form").forEach(function (form) {
-            form.addEventListener("submit", function () {
-                document.getElementById("loading-overlay").style.display = "flex";
-            });
+        document.getElementById("compare-form").addEventListener("submit", function () {
+            document.getElementById("loading-overlay").style.display = "flex";
         });
+
+        async function guessDomain(companyFieldId, domainFieldId) {
+            const companyNumber = document.getElementById(companyFieldId).value.trim();
+            if (!companyNumber) {
+                alert("Enter the company number first.");
+                return;
+            }
+            const button = event.target;
+            const originalText = button.textContent;
+            button.textContent = "Guessing...";
+
+            try {
+                const response = await fetch("/guess-domain", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ company_number: companyNumber }),
+                });
+                const data = await response.json();
+                if (data.domains && data.domains.length > 0) {
+                    document.getElementById(domainFieldId).value = data.domains[0];
+                } else {
+                    alert("Could not guess a domain for that company.");
+                }
+            } catch (error) {
+                alert("Domain guessing failed -- try entering it manually.");
+            } finally {
+                button.textContent = originalText;
+            }
+        }
     </script>
 </body>
 </html>
