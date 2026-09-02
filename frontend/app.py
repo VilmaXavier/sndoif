@@ -25,7 +25,7 @@ from ownership.ownership_graph import (
     detect_red_flags,
     entity_pairs_with_shared_person,
 )
-from ownership.report_export import build_comparison_pdf
+from ownership.report_export import build_comparison_pdf, build_search_pdf
 from ownership.sanctions_check import screen_beneficial_owners
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -38,11 +38,11 @@ KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
 
-# Temporary in-memory store for the most recent comparison results,
-# keyed by a random ID, so the PDF export button can format an
-# already-computed result instantly instead of re-running the entire
-# pipeline just to generate a downloadable file.
+# Temporary in-memory stores for the most recent results, keyed by a
+# random ID, so PDF export buttons can format an already-computed
+# result instantly instead of re-running the entire pipeline.
 COMPARISON_RESULTS: dict[str, dict] = {}
+SEARCH_RESULTS: dict[str, dict] = {}
 
 
 @app.route("/", methods=["GET"])
@@ -222,10 +222,6 @@ def compare():
 
 @app.route("/compare/export/<result_id>", methods=["GET"])
 def export_comparison_pdf(result_id):
-    """Format an already-computed comparison result as a downloadable
-    PDF -- instant, since it reuses stored results rather than
-    re-running the pipeline.
-    """
     result = COMPARISON_RESULTS.get(result_id)
     if result is None:
         return "Report not found or expired -- please run the comparison again.", 404
@@ -234,6 +230,21 @@ def export_comparison_pdf(result_id):
     build_comparison_pdf(output_path, **result)
 
     return send_file(output_path, as_attachment=True, download_name="sndoif_comparison_report.pdf")
+
+
+@app.route("/search/export/<result_id>", methods=["GET"])
+def export_search_pdf(result_id):
+    """Format an already-computed single-company search result as a
+    downloadable PDF, same instant-export pattern as the comparison export.
+    """
+    result = SEARCH_RESULTS.get(result_id)
+    if result is None:
+        return "Report not found or expired -- please run the search again.", 404
+
+    output_path = os.path.join(GRAPH_OUTPUT_DIR, f"search_{result_id}.pdf")
+    build_search_pdf(output_path, **result)
+
+    return send_file(output_path, as_attachment=True, download_name="sndoif_search_report.pdf")
 
 
 def _run_infrastructure_checks(searched_domain):
@@ -347,6 +358,20 @@ def search():
     build_visualization(focused_graph, relevant_pairs, output_path=os.path.join(GRAPH_OUTPUT_DIR, focused_filename))
     build_visualization(graph, scored_pairs, output_path=os.path.join(GRAPH_OUTPUT_DIR, full_filename))
 
+    result_id = str(uuid.uuid4())
+    SEARCH_RESULTS[result_id] = {
+        "company_name": searched_record.company_name,
+        "company_number": company_number,
+        "company_status": searched_record.company_status,
+        "officer_count": len(searched_record.officers),
+        "psc_count": len(searched_record.psc),
+        "sanctions_matches": sanctions_matches,
+        "shared_directors": relevant_shared_directors,
+        "jurisdiction_flags": [f for f in jurisdiction_flags if f["company_name"] == searched_record.company_name],
+        "scored_pairs": relevant_pairs,
+        "infra_note": infra_note,
+    }
+
     return render_template(
         "results.html",
         company_name=searched_record.company_name,
@@ -362,6 +387,7 @@ def search():
         full_filename=full_filename,
         infra_note=infra_note,
         known_count=len(all_numbers),
+        result_id=result_id,
     )
 
 
