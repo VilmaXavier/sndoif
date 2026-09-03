@@ -16,3 +16,6 @@ data/
 frontend/static/
 
 known_entities.json
+
+!data/ofac/
+!data/ofac/*.csv

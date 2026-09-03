@@ -13,3 +13,5 @@ pyvis
 flask
 
 reportlab
+
+gunicorn
