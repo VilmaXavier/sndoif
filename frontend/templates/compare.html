@@ -1,45 +1,13 @@
-﻿<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Compare Companies -- SNDOIF</title>
-    <style>
-        :root { --navy: #1a2b4c; --blue: #457b9d; --bg: #f5f7fa; --red: #e63946; --border: #d8dde3; }
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: #1d2330; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        .card { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(26,43,76,0.08); padding: 40px; max-width: 520px; width: 100%; }
-        h1 { color: var(--navy); margin: 0 0 8px; font-size: 26px; }
-        p.subtitle { color: #5a6472; margin: 0 0 24px; line-height: 1.5; }
-        .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
-        label { display: block; font-size: 13px; font-weight: 600; color: #5a6472; margin-bottom: 6px; }
-        input[type=text] { width: 100%; padding: 10px 12px; font-size: 15px; border: 1px solid var(--border); border-radius: 8px; }
-        input[type=text]:focus { outline: none; border-color: var(--blue); }
-        .guess-btn {
-            font-size: 11px; color: var(--blue); background: none; border: none; cursor: pointer;
-            padding: 2px 0; text-decoration: underline; width: auto; margin-top: 4px;
-        }
-        button[type=submit] { width: 100%; margin-top: 6px; padding: 12px; font-size: 16px; font-weight: 600; background: var(--navy); color: white; border: none; border-radius: 8px; cursor: pointer; }
-        button[type=submit]:hover { background: var(--blue); }
-        .error { background: #fdecea; color: var(--red); padding: 12px 14px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
-        .back { display: inline-block; color: var(--blue); text-decoration: none; font-size: 14px; font-weight: 600; margin-bottom: 16px; }
-        #loading-overlay {
-            display: none; position: fixed; inset: 0; background: rgba(26,43,76,0.92);
-            color: white; z-index: 999; align-items: center; justify-content: center;
-            flex-direction: column; text-align: center; padding: 20px;
-        }
-        .spinner { width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
+﻿{% extends "base.html" %}
+{% block title %}Compare Companies -- SNDOIF{% endblock %}
+{% block nav_compare %}active{% endblock %}
+{% block content %}
+<div class="container">
     <div class="card">
-        <a class="back" href="/">&larr; Back</a>
         <h1>Compare Two Companies</h1>
-        <p class="subtitle">Check whether two specific UK companies are connected --
-           shared directors/PSCs, sanctions exposure, and (if domains are given) infrastructure overlap.</p>
+        <p class="subtitle">Check whether two specific UK companies are connected -- shared directors/PSCs, sanctions exposure, and (if domains are given) infrastructure overlap.</p>
         <form method="POST" action="/compare" id="compare-form">
-            <div class="pair">
+            <div class="grid-2" style="margin-bottom:14px;">
                 <div>
                     <label for="company_a">Company A number</label>
                     <input type="text" id="company_a" name="company_a" placeholder="e.g. 09446231" required>
@@ -49,62 +17,45 @@
                     <input type="text" id="company_b" name="company_b" placeholder="e.g. 09092149" required>
                 </div>
             </div>
-            <div class="pair">
+            <div class="grid-2" style="margin-bottom:14px;">
                 <div>
                     <label for="domain_a">Domain A (optional)</label>
                     <input type="text" id="domain_a" name="domain_a" placeholder="e.g. monzo.com">
-                    <button type="button" class="guess-btn" onclick="guessDomain('company_a', 'domain_a')">Guess domain &rarr;</button>
+                    <button type="button" class="btn-ghost" style="margin-top:6px;" onclick="guessDomain('company_a', 'domain_a')">Guess domain &rarr;</button>
                 </div>
                 <div>
                     <label for="domain_b">Domain B (optional)</label>
                     <input type="text" id="domain_b" name="domain_b" placeholder="e.g. starlingbank.com">
-                    <button type="button" class="guess-btn" onclick="guessDomain('company_b', 'domain_b')">Guess domain &rarr;</button>
+                    <button type="button" class="btn-ghost" style="margin-top:6px;" onclick="guessDomain('company_b', 'domain_b')">Guess domain &rarr;</button>
                 </div>
             </div>
-            <button type="submit">Compare</button>
+            <button type="submit" class="btn btn-primary">Compare</button>
         </form>
         {% if error %}
-        <p class="error">{{ error }}</p>
+        <p style="background:var(--red-bg); color:var(--red); padding:12px 14px; border-radius:8px; margin-top:16px; font-size:14px;">{{ error }}</p>
         {% endif %}
     </div>
-
-    <div id="loading-overlay">
-        <div class="spinner"></div>
-        <p style="margin-top:20px; font-size:16px; max-width:320px;">Comparing both companies across ownership and infrastructure sources. This can take up to a minute.</p>
-    </div>
-    <script>
-        document.getElementById("compare-form").addEventListener("submit", function () {
-            document.getElementById("loading-overlay").style.display = "flex";
-        });
-
-        async function guessDomain(companyFieldId, domainFieldId) {
-            const companyNumber = document.getElementById(companyFieldId).value.trim();
-            if (!companyNumber) {
-                alert("Enter the company number first.");
-                return;
-            }
-            const button = event.target;
-            const originalText = button.textContent;
-            button.textContent = "Guessing...";
-
-            try {
-                const response = await fetch("/guess-domain", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ company_number: companyNumber }),
-                });
-                const data = await response.json();
-                if (data.domains && data.domains.length > 0) {
-                    document.getElementById(domainFieldId).value = data.domains[0];
-                } else {
-                    alert("Could not guess a domain for that company.");
-                }
-            } catch (error) {
-                alert("Domain guessing failed -- try entering it manually.");
-            } finally {
-                button.textContent = originalText;
-            }
-        }
-    </script>
-</body>
-</html>
+</div>
+{% endblock %}
+{% block extra_script %}
+<script>
+    async function guessDomain(companyFieldId, domainFieldId) {
+        const companyNumber = document.getElementById(companyFieldId).value.trim();
+        if (!companyNumber) { alert("Enter the company number first."); return; }
+        const button = event.target;
+        const originalText = button.textContent;
+        button.textContent = "Guessing...";
+        try {
+            const response = await fetch("/guess-domain", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ company_number: companyNumber }),
+            });
+            const data = await response.json();
+            if (data.domains && data.domains.length > 0) {
+                document.getElementById(domainFieldId).value = data.domains[0];
+            } else { alert("Could not guess a domain for that company."); }
+        } catch (error) { alert("Domain guessing failed -- try entering it manually."); }
+        finally { button.textContent = originalText; }
+    }
+</script>
+{% endblock %}

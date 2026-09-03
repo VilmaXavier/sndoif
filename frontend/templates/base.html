@@ -1,0 +1,106 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}SNDOIF{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --navy: #16233f; --navy-light: #24365c; --blue: #4a7fb5; --blue-light: #eaf1f8;
+            --bg: #f4f6fa; --red: #e63946; --red-bg: #fdecea; --orange: #c1660a; --orange-bg: #fef3e7;
+            --green: #2a9d6f; --green-bg: #e8f5ee; --border: #e1e6ee; --text: #1c2536; --text-muted: #6b7686;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text);
+            min-height: 100vh; display: flex; flex-direction: column;
+        }
+        .navbar {
+            background: var(--navy); color: white; padding: 14px 28px;
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+        }
+        .navbar .brand { font-weight: 800; font-size: 18px; letter-spacing: 0.02em; text-decoration: none; color: white; display: flex; align-items: center; gap: 8px; }
+        .navbar .brand .dot { width: 8px; height: 8px; background: #6fd6a8; border-radius: 50%; display: inline-block; }
+        .navbar .links { display: flex; gap: 4px; }
+        .navbar .links a {
+            color: rgba(255,255,255,0.75); text-decoration: none; font-size: 14px; font-weight: 600;
+            padding: 8px 14px; border-radius: 8px; transition: all 0.15s;
+        }
+        .navbar .links a:hover, .navbar .links a.active { color: white; background: var(--navy-light); }
+        main { flex: 1; padding: 32px 20px; }
+        .container { max-width: 720px; margin: 0 auto; }
+        .container-wide { max-width: 900px; margin: 0 auto; }
+        .card {
+            background: white; border-radius: 14px; box-shadow: 0 1px 3px rgba(22,35,63,0.06), 0 8px 24px rgba(22,35,63,0.06);
+            padding: 32px; margin-bottom: 20px; border: 1px solid var(--border);
+        }
+        h1 { font-size: 26px; font-weight: 800; color: var(--navy); margin-bottom: 6px; }
+        h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 14px; }
+        p.subtitle { color: var(--text-muted); font-size: 15px; line-height: 1.6; margin-bottom: 24px; }
+        label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+        input[type=text] {
+            width: 100%; padding: 12px 14px; font-size: 15px; font-family: inherit;
+            border: 1.5px solid var(--border); border-radius: 10px; background: #fafbfc; transition: all 0.15s;
+        }
+        input[type=text]:focus { outline: none; border-color: var(--blue); background: white; box-shadow: 0 0 0 4px var(--blue-light); }
+        .btn {
+            display: inline-block; padding: 12px 20px; font-size: 15px; font-weight: 700; border: none;
+            border-radius: 10px; cursor: pointer; text-decoration: none; text-align: center; transition: all 0.15s;
+        }
+        .btn-primary { background: var(--navy); color: white; width: 100%; }
+        .btn-primary:hover { background: var(--navy-light); transform: translateY(-1px); }
+        .btn-secondary { background: white; color: var(--navy); border: 1.5px solid var(--border); font-size: 13px; padding: 8px 16px; }
+        .btn-secondary:hover { border-color: var(--blue); }
+        .btn-ghost { background: none; color: var(--blue); text-decoration: underline; font-size: 12px; padding: 2px 0; border: none; cursor: pointer; }
+        .pill { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em; }
+        .pill-high { background: var(--red-bg); color: var(--red); }
+        .pill-low { background: var(--orange-bg); color: var(--orange); }
+        .pill-none, .pill-active { background: var(--green-bg); color: var(--green); }
+        .pill-dissolved { background: var(--red-bg); color: var(--red); }
+        .evidence-item { background: var(--red-bg); color: var(--red); border-radius: 8px; padding: 10px 14px; font-size: 14px; margin-bottom: 8px; }
+        .ok-text { color: var(--green); font-size: 14px; }
+        ul.plain { list-style: none; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+        .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+        .back-link { color: var(--blue); text-decoration: none; font-size: 14px; font-weight: 600; }
+        iframe.graph-frame { width: 100%; height: 650px; border: 1px solid var(--border); border-radius: 10px; }
+        #loading-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(22,35,63,0.95); color: white;
+            z-index: 999; align-items: center; justify-content: center; flex-direction: column; text-align: center; padding: 20px;
+        }
+        .spinner { width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.25); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        footer { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
+        @media (max-width: 600px) {
+            main { padding: 20px 14px; } .card { padding: 20px; } h1 { font-size: 22px; }
+            .navbar { padding: 12px 16px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="brand"><span class="dot"></span>SNDOIF</a>
+        <div class="links">
+            <a href="/" class="{% block nav_home %}{% endblock %}">Search</a>
+            <a href="/compare" class="{% block nav_compare %}{% endblock %}">Compare</a>
+        </div>
+    </nav>
+    <main>{% block content %}{% endblock %}</main>
+    <footer>SNDOIF &mdash; Shell Network Detection through Ownership-Infrastructure Fusion</footer>
+
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <p style="margin-top:20px; font-size:16px; max-width:320px;">Running live checks against Companies House, sanctions lists, and infrastructure sources. This can take up to a minute.</p>
+    </div>
+    <script>
+        document.querySelectorAll("form").forEach(function (form) {
+            form.addEventListener("submit", function () {
+                document.getElementById("loading-overlay").style.display = "flex";
+            });
+        });
+    </script>
+    {% block extra_script %}{% endblock %}
+</body>
+</html>

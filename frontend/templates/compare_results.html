@@ -1,83 +1,38 @@
-﻿<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ company_a_name }} vs {{ company_b_name }} -- SNDOIF</title>
-    <style>
-        :root { --navy: #1a2b4c; --blue: #457b9d; --bg: #f5f7fa; --red: #e63946; --orange: #f4a261; --green: #2a9d8f; --border: #d8dde3; }
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: #1d2330; margin: 0; padding: 24px; }
-        .wrap { max-width: 800px; margin: 0 auto; }
-        .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
-        .back { color: var(--blue); text-decoration: none; font-size: 14px; font-weight: 600; }
-        .download-btn {
-            background: var(--navy); color: white; padding: 8px 16px; border-radius: 6px;
-            text-decoration: none; font-size: 13px; font-weight: 600;
-        }
-        .download-btn:hover { background: var(--blue); }
-        .verdict-card {
-            background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(26,43,76,0.08);
-            padding: 28px; margin-bottom: 20px; text-align: center;
-        }
-        .verdict-pill {
-            display: inline-block; padding: 6px 18px; border-radius: 20px; font-weight: 700;
-            font-size: 14px; letter-spacing: 0.03em; margin-bottom: 12px;
-        }
-        .verdict-high { background: #fdecea; color: var(--red); }
-        .verdict-low { background: #fef3e7; color: #c1660a; }
-        .verdict-none { background: #e8f5f3; color: var(--green); }
-        .companies { display: flex; justify-content: center; align-items: center; gap: 16px; font-size: 15px; color: #5a6472; margin-top: 8px; }
-        .companies b { color: var(--navy); }
-        .section-card { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(26,43,76,0.08); padding: 22px; margin-bottom: 16px; }
-        .section-card h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: #5a6472; margin: 0 0 12px; }
-        .ok { color: var(--green); font-size: 14px; }
-        .evidence-item { background: #fdecea; color: var(--red); border-radius: 8px; padding: 10px 12px; font-size: 14px; margin-bottom: 8px; }
-        ul { list-style: none; margin: 0; padding: 0; }
-        @media (max-width: 600px) { body { padding: 12px; } .verdict-card, .section-card { padding: 18px; } .companies { flex-direction: column; gap: 4px; } }
-    </style>
-</head>
-<body>
-    <div class="wrap">
-        <div class="top-row">
-            <a class="back" href="/compare">&larr; New comparison</a>
-            <a class="download-btn" href="/compare/export/{{ result_id }}">Download PDF report</a>
-        </div>
-
-        <div class="verdict-card">
-            <span class="verdict-pill verdict-{{ confidence }}">{{ confidence|upper }} CONFIDENCE</span>
-            <div class="companies">
-                <b>{{ company_a_name }}</b> &harr; <b>{{ company_b_name }}</b>
-            </div>
-        </div>
-
-        <div class="section-card">
-            <h2>Shared Directors / PSCs</h2>
-            {% if shared_people %}
-                <ul>{% for p in shared_people %}<li class="evidence-item">{{ p }}</li>{% endfor %}</ul>
-            {% else %}
-                <p class="ok">No shared officers or beneficial owners found.</p>
-            {% endif %}
-        </div>
-
-        <div class="section-card">
-            <h2>Sanctions Screening</h2>
-            {% if sanctions_matches %}
-                <ul>{% for m in sanctions_matches %}<li class="evidence-item">{{ m.screened_name }} ~ {{ m.matched_name }} (score {{ "%.1f"|format(m.score) }})</li>{% endfor %}</ul>
-            {% else %}
-                <p class="ok">No sanctions matches found for either company.</p>
-            {% endif %}
-        </div>
-
-        <div class="section-card">
-            <h2>Infrastructure Overlap</h2>
-            {% if infra_note %}<p style="font-size:13px; color:#5a6472; margin-bottom:10px;">{{ infra_note }}</p>{% endif %}
-            {% if infra_overlaps %}
-                <ul>{% for o in infra_overlaps %}<li class="evidence-item">{{ o }}</li>{% endfor %}</ul>
-            {% else %}
-                <p class="ok">No infrastructure overlap found.</p>
-            {% endif %}
-        </div>
+﻿{% extends "base.html" %}
+{% block title %}{{ company_a_name }} vs {{ company_b_name }} -- SNDOIF{% endblock %}
+{% block nav_compare %}active{% endblock %}
+{% block content %}
+<div class="container-wide">
+    <div class="top-row">
+        <a class="back-link" href="/compare">&larr; New comparison</a>
+        <a href="/compare/export/{{ result_id }}" class="btn-secondary">Download PDF report</a>
     </div>
-</body>
-</html>
+
+    <div class="card" style="text-align:center;">
+        <span class="pill pill-{{ confidence }}" style="font-size:13px; padding:6px 16px;">{{ confidence|upper }} CONFIDENCE</span>
+        <div style="margin-top:12px; font-size:16px; color:var(--text-muted);"><b style="color:var(--navy);">{{ company_a_name }}</b> &harr; <b style="color:var(--navy);">{{ company_b_name }}</b></div>
+    </div>
+
+    <div class="card">
+        <h2>Shared Directors / PSCs</h2>
+        {% if shared_people %}
+            <ul class="plain">{% for p in shared_people %}<li class="evidence-item">{{ p }}</li>{% endfor %}</ul>
+        {% else %}<p class="ok-text">No shared officers or beneficial owners found.</p>{% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Sanctions Screening</h2>
+        {% if sanctions_matches %}
+            <ul class="plain">{% for m in sanctions_matches %}<li class="evidence-item">{{ m.screened_name }} ~ {{ m.matched_name }} (score {{ "%.1f"|format(m.score) }})</li>{% endfor %}</ul>
+        {% else %}<p class="ok-text">No sanctions matches found for either company.</p>{% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Infrastructure Overlap</h2>
+        {% if infra_note %}<p style="font-size:13px; color:var(--text-muted); margin-bottom:10px;">{{ infra_note }}</p>{% endif %}
+        {% if infra_overlaps %}
+            <ul class="plain">{% for o in infra_overlaps %}<li class="evidence-item">{{ o }}</li>{% endfor %}</ul>
+        {% else %}<p class="ok-text">No infrastructure overlap found.</p>{% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,79 +1,43 @@
-﻿<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SNDOIF -- Shell Network Detection</title>
-    <style>
-        :root { --navy: #1a2b4c; --blue: #457b9d; --light-blue: #a8dadc; --bg: #f5f7fa; --red: #e63946; --border: #d8dde3; }
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: #1d2330; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        .card { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(26, 43, 76, 0.08); padding: 40px; max-width: 480px; width: 100%; }
-        .badge { display: inline-block; background: var(--light-blue); color: var(--navy); font-size: 12px; font-weight: 600; letter-spacing: 0.05em; padding: 4px 10px; border-radius: 20px; margin-bottom: 12px; }
-        h1 { color: var(--navy); margin: 0 0 8px; font-size: 28px; }
-        p.subtitle { color: #5a6472; margin: 0 0 20px; line-height: 1.5; }
-        .known-count { font-size: 13px; color: var(--blue); font-weight: 600; margin-bottom: 20px; }
-        label { display: block; font-size: 13px; font-weight: 600; color: #5a6472; margin-bottom: 6px; }
-        input[type=text] { width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
-        input[type=text]:focus { outline: none; border-color: var(--blue); }
-        button { width: 100%; margin-top: 4px; padding: 12px; font-size: 16px; font-weight: 600; background: var(--navy); color: white; border: none; border-radius: 8px; cursor: pointer; }
-        button:hover { background: var(--blue); }
-        .error { background: #fdecea; color: var(--red); padding: 12px 14px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
-        .hint { font-size: 12px; color: #8a92a0; margin-top: 8px; }
-        .divider { text-align: center; color: #8a92a0; font-size: 12px; margin: 20px 0; }
-        #loading-overlay {
-            display: none; position: fixed; inset: 0; background: rgba(26,43,76,0.92);
-            color: white; z-index: 999; align-items: center; justify-content: center;
-            flex-direction: column; text-align: center; padding: 20px;
-        }
-        .spinner {
-            width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.3);
-            border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
+﻿{% extends "base.html" %}
+{% block title %}SNDOIF -- Shell Network Detection{% endblock %}
+{% block nav_home %}active{% endblock %}
+{% block content %}
+<div class="container">
     <div class="card">
-        <span class="badge">SNDOIF</span>
         <h1>Shell Network Detection</h1>
-        <p class="subtitle">Search for a UK company by name to check ownership,
-           sanctions exposure, and network connections.</p>
-        <p class="known-count">Comparing against {{ known_count }} known companies -- every search grows this set.</p>
+        <p class="subtitle">Search for a UK company by name to check ownership, sanctions exposure, and network connections. Comparing against <b>{{ known_count }}</b> known companies -- every search grows this set.</p>
+
         <form method="POST" action="/search-by-name">
             <label for="query">Company name</label>
-            <input type="text" id="query" name="query" placeholder="e.g. Deliveroo" required>
-            <button type="submit">Search</button>
+            <input type="text" id="query" name="query" placeholder="e.g. Deliveroo" required style="margin-bottom: 14px;">
+            <button type="submit" class="btn btn-primary">Search</button>
         </form>
 
-        <div class="divider">or, if you know the exact number</div>
-        <p style="text-align:center; margin: 4px 0 16px;"><a href="/compare" style="color:#457b9d; font-size:13px; font-weight:600;">Or compare two specific companies directly &rarr;</a></p>
+        <div style="text-align:center; color:var(--text-muted); font-size:12px; margin:22px 0;">or, if you know the exact number</div>
 
+        <form method="POST" action="/compare" style="display:none;"></form>
         <form method="POST" action="/search">
-            <label for="company_number">Company number</label>
-            <input type="text" id="company_number" name="company_number" placeholder="e.g. 09446231" required>
-            <label for="domain">Website domain (optional -- enables infrastructure checks)</label>
-            <input type="text" id="domain" name="domain" placeholder="e.g. deliveroo.co.uk">
-            <button type="submit">Analyze</button>
+            <div class="grid-2" style="margin-bottom:14px;">
+                <div>
+                    <label for="company_number">Company number</label>
+                    <input type="text" id="company_number" name="company_number" placeholder="e.g. 09446231" required>
+                </div>
+                <div>
+                    <label for="domain">Website domain (optional)</label>
+                    <input type="text" id="domain" name="domain" placeholder="e.g. deliveroo.co.uk">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Analyze</button>
         </form>
-        <p class="hint">Domain is used to run WHOIS, certificate, hosting, and tracking-ID
-           checks alongside ownership data. Without it, only ownership evidence is checked.</p>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:12px;">Domain enables WHOIS, certificate, hosting, and tracking-ID checks alongside ownership data.</p>
+
+        <div style="text-align:center; margin-top:20px;">
+            <a href="/compare" class="btn-ghost">Or compare two specific companies directly &rarr;</a>
+        </div>
+
         {% if error %}
-        <p class="error">{{ error }}</p>
+        <p style="background:var(--red-bg); color:var(--red); padding:12px 14px; border-radius:8px; margin-top:16px; font-size:14px;">{{ error }}</p>
         {% endif %}
     </div>
-
-    <div id="loading-overlay">
-        <div class="spinner"></div>
-        <p style="margin-top:20px; font-size:16px; max-width:320px;">Running live checks against Companies House, sanctions lists, and infrastructure sources. This can take up to a minute.</p>
-    </div>
-    <script>
-        document.querySelectorAll("form").forEach(function (form) {
-            form.addEventListener("submit", function () {
-                document.getElementById("loading-overlay").style.display = "flex";
-            });
-        });
-    </script>
-</body>
-</html>
-
+</div>
+{% endblock %}
