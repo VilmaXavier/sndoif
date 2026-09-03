@@ -1,52 +1,55 @@
 ﻿# SNDOIF — Shell Network Detection through Ownership-Infrastructure Fusion
 
-Fuses corporate ownership analysis with technical infrastructure correlation to
-detect hidden relationships between shell companies, for third-party due
-diligence and AML/compliance use cases. Originally scoped as a two-person
-project; both the Ownership & Compliance Layer and the Infrastructure
-Correlation Layer were ultimately built solo.
+A due-diligence tool that fuses UK corporate ownership analysis with technical
+infrastructure correlation to detect hidden relationships between companies —
+built entirely solo (both the compliance/ownership layer and the
+cybersecurity/OSINT infrastructure layer), including a full web frontend.
 
-## Project Structure
+## What it does
 
-- `ownership/` — Ownership & Compliance Layer. Complete.
-- `infrastructure/` — Infrastructure Correlation Layer. Complete.
-- `fusion/` — Combines evidence from both layers into a confidence score. Complete.
-- `main.py` — Ownership layer pipeline only.
-- `infrastructure_main.py` — Infrastructure layer pipeline only.
-- `project_main.py` — Full end-to-end pipeline: ownership -> infrastructure -> fusion.
+Search or compare UK companies to check:
+- **Ownership**: shared directors/PSCs, circular ownership, FATF jurisdiction risk
+- **Sanctions**: fuzzy-matched against the OFAC SDN list (primary names + aliases)
+- **Infrastructure**: WHOIS, SSL certificate reuse, shared hosting, tracking-ID/favicon overlap
+- **Fusion**: combines both types of evidence into a HIGH / LOW / NONE confidence score
 
-## Ownership & Compliance Layer
+Every successful search permanently joins a growing "known entities" set, so the
+tool's coverage improves the more it's used, rather than staying frozen at a
+fixed starting sample.
 
-- `ownership/companies_house.py` — UK Companies House API client (profile,
-  officers, PSC/beneficial ownership). `build_ownership_records()` batches
-  and normalizes into `OwnershipRecord` objects, skipping failures gracefully.
-- `ownership/icij_leaks.py` — ICIJ Offshore Leaks bulk CSV search and
-  relationship-subgraph lookup, validated against real Panama Papers data.
-- `ownership/sanctions_check.py` — Fuzzy name matching (rapidfuzz) against
-  the free OFAC SDN list (primary names + aliases).
-- `ownership/ownership_graph.py` — Directed graph (networkx) of people to
-  companies. Detects shared directors, circular ownership, and FATF
-  high-risk-jurisdiction PSCs.
+## Web app
 
-## Infrastructure Correlation Layer
+Run `python -m frontend.app` and visit http://127.0.0.1:5000 for:
+- **Search by name or number** — runs the full pipeline live, shows an interactive
+  network graph (focused view + full network toggle), downloadable as PDF
+- **Compare two companies directly** — shared people, sanctions, and infrastructure
+  overlap between two specific companies, with a "guess domain" helper and
+  downloadable PDF report
 
-- `infrastructure/whois_lookup.py` — WHOIS registration comparison, with
-  explicit handling of WHOIS privacy-redaction placeholders to avoid false
-  positives (a real bug found and fixed during development).
-- `infrastructure/cert_transparency.py` — SSL certificate SAN overlap
-  detection via crt.sh, with retry/backoff for this service's frequent
-  transient failures.
-- `infrastructure/hosting_correlation.py` — Shared IP / subnet clustering
-  via free DNS resolution.
-- `infrastructure/analytics_fingerprint.py` — Tracking ID and favicon hash
-  extraction and comparison.
+## Project structure
 
-## Fusion
-
-- `fusion/scoring.py` — Combines ownership-layer entity pairs with
-  infrastructure-layer overlaps. A pair with BOTH types of evidence scores
-  HIGH confidence; a pair with only one type scores LOW confidence and is
-  flagged for manual review; pairs with no evidence are not reported.
+- `ownership/` — Ownership & Compliance Layer
+  - `companies_house.py` — Companies House API client (profile, officers, PSC,
+    name search). `build_ownership_records()` batches and normalizes results.
+  - `icij_leaks.py` — ICIJ Offshore Leaks bulk CSV search and relationship lookup.
+  - `sanctions_check.py` — OFAC SDN fuzzy matching (rapidfuzz, primary + alias names).
+  - `ownership_graph.py` — networkx graph of people-to-companies; detects shared
+    directors, circular ownership, FATF jurisdiction risk.
+  - `entity_store.py` — persistent JSON store of known companies, grows with use.
+  - `domain_guesser.py` — heuristic + DNS-verified domain guessing from a company name.
+  - `report_export.py` — PDF report generation (reportlab) for search and comparison results.
+- `infrastructure/` — Infrastructure Correlation Layer
+  - `whois_lookup.py` — WHOIS comparison, with privacy-redaction-placeholder handling.
+  - `cert_transparency.py` — SSL certificate SAN overlap via crt.sh, retry/backoff.
+  - `hosting_correlation.py` — shared IP / subnet clustering via DNS.
+  - `analytics_fingerprint.py` — tracking ID and favicon hash extraction/comparison.
+  - `cache.py` — time-based caching for slow external lookups.
+- `fusion/`
+  - `scoring.py` — combines ownership + infrastructure evidence into a confidence score.
+  - `visualization.py` — interactive pyvis network graph generation.
+- `frontend/` — Flask web app (search, compare, name lookup, PDF export).
+- `main.py` / `infrastructure_main.py` / `project_main.py` — CLI pipelines
+  for each layer individually or the full combined pipeline.
 
 ## Setup
 
@@ -62,23 +65,46 @@ Correlation Layer were ultimately built solo.
 
 ## Running it
 
-- `python main.py` — ownership layer only
-- `python infrastructure_main.py` — infrastructure layer only
-- `python project_main.py` — full pipeline with fused confidence scores
-- `pytest` — full test suite (both layers)
+- `python -m frontend.app` — the web app (recommended)
+- `python main.py` / `python infrastructure_main.py` / `python project_main.py` — CLI pipelines
+- `pytest` — full test suite (ownership, infrastructure, cache, frontend)
+
+## Real findings from testing
+
+- **HIGH confidence**: Ocado Group Plc &harr; Ocado Retail Limited — 10 shared
+  directors AND a shared domain registrar, a genuine, corroborated joint-venture
+  relationship.
+- **LOW confidence**: Deliveroo Limited &harr; Ocado Group Plc — one shared
+  non-executive director (Claudia Arney), a real but weaker signal needing
+  manual review.
+- **NONE**: Monzo Bank &harr; Starling Bank — two genuine competitors, correctly
+  showing no connection.
+- **Documented false positives**: a name-collision between two unrelated
+  companies sharing an officer name; shared "big name" registrars/CDNs
+  (MarkMonitor, Cloudflare) that are common and meaningless; WHOIS privacy
+  redaction placeholders that looked like a real match until fixed; generic
+  corporate-naming overlap in sanctions screening ("X Group Holdings" vs
+  "Y Group Holdings").
 
 ## Known limitations
 
-- People are identified by name alone in the ownership graph (Companies House
-  exposes no unique person ID). A real name-collision false positive was
-  observed in testing (an officer shared between two unrelated companies).
-- Cross-referencing ICIJ entity names to Companies House registrations by
-  name proved unreliable in practice.
-- crt.sh (certificate transparency) is a free community service prone to
-  outages and rate limiting; the pipeline handles this gracefully via retry
-  with backoff, but results can vary run to run depending on its availability.
-- Fusion can only score a pair when both companies have a mapped domain in
-  `fusion.scoring.ENTITY_DOMAIN_MAP` — this mapping is currently built by
-  hand for the sample and does not scale automatically to new entities.
-- The FATF high-risk jurisdiction list is a static snapshot in the code and
-  should be re-checked against FATF's current published list periodically.
+- People are identified by name alone in the ownership graph (no unique person
+  ID is exposed by Companies House) — a real name-collision false positive was
+  observed in testing.
+- Cross-referencing ICIJ entity names to Companies House registrations by name
+  proved unreliable in practice.
+- crt.sh (certificate transparency) is a free community service that failed in
+  the majority of test runs during development (502/timeout errors) —
+  independent of retry logic. A production system would need a paid CT log API
+  or self-hosted mirror.
+- Domain guessing is a heuristic, not authoritative: it can return the same
+  domain for two different but related companies (observed with Ocado Group
+  and Ocado Retail); a same-domain safeguard prevents this producing a false
+  positive, but the guess itself is not guaranteed correct.
+- The FATF high-risk jurisdiction list is a static snapshot and should be
+  re-checked against FATF's current published list periodically.
+- The sanctions match threshold (85) misses translated/reworded name variants
+  (e.g. "Banco Nacional de Cuba" vs "National Bank of Cuba", score 74.4).
+- Fusion can only score a pair when both companies have a known/guessable
+  domain; the ownership layer is UK Companies House-specific and cannot be
+  used for companies registered outside the UK.
