@@ -19,3 +19,6 @@ data/ofac/*
 
 frontend/static/
 known_entities.json
+
+lib/
+sndoif_network.html
