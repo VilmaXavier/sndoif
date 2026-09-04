@@ -19,8 +19,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("data/ofac")
-SDN_FILE = DATA_DIR / "SDN.CSV"
-ALT_FILE = DATA_DIR / "ALT.CSV"
+SDN_FILE = DATA_DIR / "sdn.csv"
+ALT_FILE = DATA_DIR / "alt.csv"
 
 # OFAC publishes these files with no header row, so we name the
 # columns ourselves based on OFAC's published data specification.
