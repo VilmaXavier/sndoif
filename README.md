@@ -1,5 +1,7 @@
 ﻿# SNDOIF — Shell Network Detection through Ownership-Infrastructure Fusion
 
+**Live demo:** https://sndoif.onrender.com
+
 A due-diligence tool that fuses UK corporate ownership analysis with technical
 infrastructure correlation to detect hidden relationships between companies —
 built entirely solo (both the compliance/ownership layer and the
@@ -108,3 +110,10 @@ Run `python -m frontend.app` and visit http://127.0.0.1:5000 for:
 - Fusion can only score a pair when both companies have a known/guessable
   domain; the ownership layer is UK Companies House-specific and cannot be
   used for companies registered outside the UK.
+
+
+## Deployment notes
+
+Deployed on Render (https://sndoif.onrender.com). Two real, cross-platform issues surfaced during deployment that never appeared in local Windows testing:
+- **Case-sensitive filenames**: the OFAC data files were referenced as SDN.CSV/ALT.CSV in code but committed as lowercase sdn.csv/alt.csv. Windows' case-insensitive filesystem masked this; Render's Linux filesystem does not.
+- **Gunicorn's default 30-second request timeout** is too short for a full multi-company pipeline run (each company needs 3 separate Companies House API calls). Fixed by raising the timeout: gunicorn frontend.app:app --timeout 120.
