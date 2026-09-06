@@ -38,9 +38,6 @@ KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
 
-# Temporary in-memory stores for the most recent results, keyed by a
-# random ID, so PDF export buttons can format an already-computed
-# result instantly instead of re-running the entire pipeline.
 COMPARISON_RESULTS: dict[str, dict] = {}
 SEARCH_RESULTS: dict[str, dict] = {}
 
@@ -142,6 +139,21 @@ def _run_infrastructure_checks_pair(domain_a, domain_b):
     return overlaps, fully_succeeded
 
 
+def _check_domain_belongs_to_company(domain: str, company_name: str) -> bool:
+    """Best-effort check: does this domain match one of the domains our
+    own guesser would independently produce for this company name?
+
+    There is no official public registry mapping a UK company number to
+    its website domain, so this cannot be a guaranteed verification --
+    only a sanity check. A False result means the domain could not be
+    confirmed as belonging to the company; it does NOT necessarily mean
+    the domain is wrong, since the guesser itself is a heuristic and may
+    not find every real domain a company uses.
+    """
+    guessed = [d.lower() for d in guess_domains(company_name)]
+    return domain.lower().strip() in guessed
+
+
 @app.route("/compare", methods=["POST"])
 def compare():
     company_a_number = request.form.get("company_a", "").strip()
@@ -166,6 +178,24 @@ def compare():
 
     sanctions_matches = screen_beneficial_owners(list(names_a | names_b))
 
+    # Sanity-check that each entered domain plausibly belongs to the
+    # company it was entered for. There is no authoritative way to
+    # verify this, so an unconfirmed domain is NOT blocked -- it is
+    # still checked, but the result is clearly flagged as unverified
+    # so a domain typed for the wrong company doesn't silently look
+    # like a confirmed match.
+    domain_warnings = []
+    if domain_a and not _check_domain_belongs_to_company(domain_a, record_a.company_name):
+        domain_warnings.append(
+            f"'{domain_a}' could not be automatically confirmed as belonging to "
+            f"{record_a.company_name} -- treat any infrastructure findings involving it with caution."
+        )
+    if domain_b and not _check_domain_belongs_to_company(domain_b, record_b.company_name):
+        domain_warnings.append(
+            f"'{domain_b}' could not be automatically confirmed as belonging to "
+            f"{record_b.company_name} -- treat any infrastructure findings involving it with caution."
+        )
+
     infra_overlaps = []
     infra_note = None
     if domain_a and domain_b:
@@ -178,8 +208,11 @@ def compare():
             )
         else:
             infra_overlaps, fully_succeeded = _run_infrastructure_checks_pair(domain_a, domain_b)
+            notes = []
             if not fully_succeeded:
-                infra_note = "Some infrastructure checks failed (external service issue) -- results may be incomplete."
+                notes.append("Some infrastructure checks failed (external service issue) -- results may be incomplete.")
+            notes.extend(domain_warnings)
+            infra_note = " ".join(notes) if notes else None
     else:
         infra_note = "No domains provided -- infrastructure checks skipped."
 
@@ -234,9 +267,6 @@ def export_comparison_pdf(result_id):
 
 @app.route("/search/export/<result_id>", methods=["GET"])
 def export_search_pdf(result_id):
-    """Format an already-computed single-company search result as a
-    downloadable PDF, same instant-export pattern as the comparison export.
-    """
     result = SEARCH_RESULTS.get(result_id)
     if result is None:
         return "Report not found or expired -- please run the search again.", 404
@@ -334,12 +364,22 @@ def search():
     infrastructure_overlaps = []
     infra_note = "No domain provided -- infrastructure checks skipped."
     if searched_domain:
+        domain_warning = None
+        if not _check_domain_belongs_to_company(searched_domain, searched_record.company_name):
+            domain_warning = (
+                f"'{searched_domain}' could not be automatically confirmed as belonging to "
+                f"{searched_record.company_name} -- treat infrastructure findings with caution."
+            )
         logger.info("Running best-effort infrastructure checks for %s", searched_domain)
         infrastructure_overlaps, fully_succeeded = _run_infrastructure_checks(searched_domain)
-        infra_note = (
-            "Infrastructure checks completed." if fully_succeeded
-            else "Infrastructure checks partially failed (external service issue) -- results may be incomplete."
-        )
+        notes = []
+        if fully_succeeded:
+            notes.append("Infrastructure checks completed.")
+        else:
+            notes.append("Infrastructure checks partially failed (external service issue) -- results may be incomplete.")
+        if domain_warning:
+            notes.append(domain_warning)
+        infra_note = " ".join(notes)
 
     company_names = [r.company_name for r in records]
     scored_pairs = score_all_pairs(company_names, ownership_pairs, infrastructure_overlaps)
