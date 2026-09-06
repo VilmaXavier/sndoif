@@ -38,8 +38,20 @@ KNOWN_DOMAINS = ["monzo.com", "revolut.com", "wise.com", "deliveroo.co.uk"]
 GRAPH_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(GRAPH_OUTPUT_DIR, exist_ok=True)
 
-COMPARISON_RESULTS: dict[str, dict] = {}
-SEARCH_RESULTS: dict[str, dict] = {}
+COMPARISON_RESULTS = {}
+SEARCH_RESULTS = {}
+
+
+def _check_domain_belongs_to_company(domain, company_name):
+    """Best-effort check: does this domain match one of the domains our
+    own guesser would independently produce for this company name?
+    There is no official public registry mapping a UK company number to
+    its website domain, so this cannot be a guaranteed verification --
+    only a sanity check. A False result means the domain could not be
+    confirmed; it does NOT necessarily mean the domain is wrong.
+    """
+    guessed = [d.lower() for d in guess_domains(company_name)]
+    return domain.lower().strip() in guessed
 
 
 @app.route("/", methods=["GET"])
@@ -67,6 +79,29 @@ def guess_domain_endpoint():
     return jsonify({"domains": domains})
 
 
+@app.route("/validate-domain", methods=["POST"])
+def validate_domain_endpoint():
+    """Real-time check used by the compare page's inline validation,
+    called via JavaScript when the user leaves a domain field --
+    the same pattern as inline password-rule validation.
+    """
+    company_number = request.json.get("company_number", "").strip()
+    domain = request.json.get("domain", "").strip()
+
+    if not company_number or not domain:
+        return jsonify({"valid": True, "message": ""})
+
+    records = build_ownership_records([company_number])
+    if not records:
+        return jsonify({"valid": True, "message": ""})
+
+    company_name = records[0].company_name
+    is_valid = _check_domain_belongs_to_company(domain, company_name)
+
+    message = "" if is_valid else "This domain could not be confirmed as belonging to " + company_name + "."
+    return jsonify({"valid": is_valid, "message": message})
+
+
 @app.route("/search-by-name", methods=["POST"])
 def search_by_name():
     query = request.form.get("query", "").strip()
@@ -84,11 +119,11 @@ def _whois_check_pair(domain_a, domain_b):
     if len(records) == 2:
         comparison = compare_domains(records[0], records[1])
         if comparison["same_registrar"]:
-            findings.append(f"Same registrar: {records[0]['registrar']}")
+            findings.append("Same registrar: " + str(records[0]["registrar"]))
         if comparison["same_registrant_org"]:
-            findings.append(f"Same registrant organization: {records[0]['registrant_org']}")
+            findings.append("Same registrant organization: " + str(records[0]["registrant_org"]))
         if comparison["shared_name_servers"]:
-            findings.append(f"Shared name servers: {', '.join(comparison['shared_name_servers'])}")
+            findings.append("Shared name servers: " + ", ".join(comparison["shared_name_servers"]))
     return findings
 
 
@@ -96,7 +131,7 @@ def _hosting_check_pair(domain_a, domain_b):
     findings = []
     shared_ips = cluster_by_shared_ip([domain_a, domain_b])
     for ip in shared_ips:
-        findings.append(f"Shared IP address: {ip}")
+        findings.append("Shared IP address: " + ip)
     return findings
 
 
@@ -104,17 +139,17 @@ def _cert_check_pair(domain_a, domain_b):
     findings = []
     comparison = compare_certificates(domain_a, domain_b)
     if comparison["shared_certificate_found"]:
-        findings.append(f"Shared SSL certificate covering: {', '.join(comparison['shared_domains'])}")
+        findings.append("Shared SSL certificate covering: " + ", ".join(comparison["shared_domains"]))
     return findings
 
 
 def _analytics_check_pair(domain_a, domain_b):
     findings = []
-    fp_a = fingerprint_site(f"https://{domain_a}")
-    fp_b = fingerprint_site(f"https://{domain_b}")
+    fp_a = fingerprint_site("https://" + domain_a)
+    fp_b = fingerprint_site("https://" + domain_b)
     comparison = compare_fingerprints(fp_a, fp_b)
     for tracking_type, ids in comparison["shared_tracking_ids"].items():
-        findings.append(f"Shared {tracking_type}: {', '.join(ids)}")
+        findings.append("Shared " + tracking_type + ": " + ", ".join(ids))
     if comparison["same_favicon"]:
         findings.append("Identical favicon image")
     return findings
@@ -128,7 +163,9 @@ def _run_infrastructure_checks_pair(domain_a, domain_b):
     overlaps = []
     fully_succeeded = True
     with ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_name = {executor.submit(func, domain_a, domain_b): name for name, func in checks.items()}
+        future_to_name = {}
+        for name, func in checks.items():
+            future_to_name[executor.submit(func, domain_a, domain_b)] = name
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             try:
@@ -137,21 +174,6 @@ def _run_infrastructure_checks_pair(domain_a, domain_b):
                 logger.warning("%s check failed: %s", name, error)
                 fully_succeeded = False
     return overlaps, fully_succeeded
-
-
-def _check_domain_belongs_to_company(domain: str, company_name: str) -> bool:
-    """Best-effort check: does this domain match one of the domains our
-    own guesser would independently produce for this company name?
-
-    There is no official public registry mapping a UK company number to
-    its website domain, so this cannot be a guaranteed verification --
-    only a sanity check. A False result means the domain could not be
-    confirmed as belonging to the company; it does NOT necessarily mean
-    the domain is wrong, since the guesser itself is a heuristic and may
-    not find every real domain a company uses.
-    """
-    guessed = [d.lower() for d in guess_domains(company_name)]
-    return domain.lower().strip() in guessed
 
 
 @app.route("/compare", methods=["POST"])
@@ -172,40 +194,23 @@ def compare():
 
     record_a, record_b = records[0], records[1]
 
-    names_a = {o["name"] for o in record_a.officers} | {p["name"] for p in record_a.psc if p.get("name")}
-    names_b = {o["name"] for o in record_b.officers} | {p["name"] for p in record_b.psc if p.get("name")}
+    names_a = set(o["name"] for o in record_a.officers) | set(p["name"] for p in record_a.psc if p.get("name"))
+    names_b = set(o["name"] for o in record_b.officers) | set(p["name"] for p in record_b.psc if p.get("name"))
     shared_people = sorted(names_a & names_b)
 
     sanctions_matches = screen_beneficial_owners(list(names_a | names_b))
 
-    # Sanity-check that each entered domain plausibly belongs to the
-    # company it was entered for. There is no authoritative way to
-    # verify this, so an unconfirmed domain is NOT blocked -- it is
-    # still checked, but the result is clearly flagged as unverified
-    # so a domain typed for the wrong company doesn't silently look
-    # like a confirmed match.
     domain_warnings = []
     if domain_a and not _check_domain_belongs_to_company(domain_a, record_a.company_name):
-        domain_warnings.append(
-            f"'{domain_a}' could not be automatically confirmed as belonging to "
-            f"{record_a.company_name} -- treat any infrastructure findings involving it with caution."
-        )
+        domain_warnings.append("'" + domain_a + "' could not be automatically confirmed as belonging to " + record_a.company_name + " -- treat any infrastructure findings involving it with caution.")
     if domain_b and not _check_domain_belongs_to_company(domain_b, record_b.company_name):
-        domain_warnings.append(
-            f"'{domain_b}' could not be automatically confirmed as belonging to "
-            f"{record_b.company_name} -- treat any infrastructure findings involving it with caution."
-        )
+        domain_warnings.append("'" + domain_b + "' could not be automatically confirmed as belonging to " + record_b.company_name + " -- treat any infrastructure findings involving it with caution.")
 
     infra_overlaps = []
     infra_note = None
     if domain_a and domain_b:
         if domain_a.lower().strip() == domain_b.lower().strip():
-            infra_note = (
-                f"Both companies resolved to the same domain ({domain_a}) -- "
-                f"infrastructure checks skipped, since comparing a domain to "
-                f"itself would trivially match on everything. Verify the "
-                f"domains are correct for each specific company."
-            )
+            infra_note = "Both companies resolved to the same domain (" + domain_a + ") -- infrastructure checks skipped, since comparing a domain to itself would trivially match on everything. Verify the domains are correct for each specific company."
         else:
             infra_overlaps, fully_succeeded = _run_infrastructure_checks_pair(domain_a, domain_b)
             notes = []
@@ -259,7 +264,7 @@ def export_comparison_pdf(result_id):
     if result is None:
         return "Report not found or expired -- please run the comparison again.", 404
 
-    output_path = os.path.join(GRAPH_OUTPUT_DIR, f"comparison_{result_id}.pdf")
+    output_path = os.path.join(GRAPH_OUTPUT_DIR, "comparison_" + result_id + ".pdf")
     build_comparison_pdf(output_path, **result)
 
     return send_file(output_path, as_attachment=True, download_name="sndoif_comparison_report.pdf")
@@ -271,7 +276,7 @@ def export_search_pdf(result_id):
     if result is None:
         return "Report not found or expired -- please run the search again.", 404
 
-    output_path = os.path.join(GRAPH_OUTPUT_DIR, f"search_{result_id}.pdf")
+    output_path = os.path.join(GRAPH_OUTPUT_DIR, "search_" + result_id + ".pdf")
     build_search_pdf(output_path, **result)
 
     return send_file(output_path, as_attachment=True, download_name="sndoif_search_report.pdf")
@@ -307,7 +312,7 @@ def _run_infrastructure_checks(searched_domain):
 
     def analytics():
         results = []
-        fingerprints = [fingerprint_site(f"https://{d}") for d in domains]
+        fingerprints = [fingerprint_site("https://" + d) for d in domains]
         for i in range(len(fingerprints)):
             for j in range(i + 1, len(fingerprints)):
                 comparison = compare_fingerprints(fingerprints[i], fingerprints[j])
@@ -320,7 +325,9 @@ def _run_infrastructure_checks(searched_domain):
 
     checks = {"whois_hosting": whois_and_hosting, "certificates": certificates, "analytics": analytics}
     with ThreadPoolExecutor(max_workers=3) as executor:
-        future_to_name = {executor.submit(func): name for name, func in checks.items()}
+        future_to_name = {}
+        for name, func in checks.items():
+            future_to_name[executor.submit(func)] = name
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             try:
@@ -345,9 +352,14 @@ def search():
     all_numbers = list(dict.fromkeys(known_companies + [company_number]))
     records = build_ownership_records(all_numbers)
 
-    searched_record = next((r for r in records if r.company_number == company_number), None)
+    searched_record = None
+    for r in records:
+        if r.company_number == company_number:
+            searched_record = r
+            break
+
     if searched_record is None:
-        return render_template("index.html", error=f"Could not find company number '{company_number}'.", known_count=len(known_companies))
+        return render_template("index.html", error="Could not find company number '" + company_number + "'.", known_count=len(known_companies))
 
     add_known_company(company_number)
 
@@ -366,10 +378,7 @@ def search():
     if searched_domain:
         domain_warning = None
         if not _check_domain_belongs_to_company(searched_domain, searched_record.company_name):
-            domain_warning = (
-                f"'{searched_domain}' could not be automatically confirmed as belonging to "
-                f"{searched_record.company_name} -- treat infrastructure findings with caution."
-            )
+            domain_warning = "'" + searched_domain + "' could not be automatically confirmed as belonging to " + searched_record.company_name + " -- treat infrastructure findings with caution."
         logger.info("Running best-effort infrastructure checks for %s", searched_domain)
         infrastructure_overlaps, fully_succeeded = _run_infrastructure_checks(searched_domain)
         notes = []
@@ -392,8 +401,8 @@ def search():
     else:
         focused_graph = graph
 
-    focused_filename = f"graph_focused_{company_number}.html"
-    full_filename = f"graph_full_{company_number}.html"
+    focused_filename = "graph_focused_" + company_number + ".html"
+    full_filename = "graph_full_" + company_number + ".html"
 
     build_visualization(focused_graph, relevant_pairs, output_path=os.path.join(GRAPH_OUTPUT_DIR, focused_filename))
     build_visualization(graph, scored_pairs, output_path=os.path.join(GRAPH_OUTPUT_DIR, full_filename))

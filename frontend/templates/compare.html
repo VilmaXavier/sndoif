@@ -22,14 +22,16 @@
                     <label for="domain_a">Domain A (optional)</label>
                     <input type="text" id="domain_a" name="domain_a" placeholder="e.g. monzo.com">
                     <button type="button" class="btn-ghost" style="margin-top:6px;" onclick="guessDomain('company_a', 'domain_a')">Guess domain &rarr;</button>
+                    <p id="domain_a_error" style="display:none; color:#e63946; font-size:12px; margin-top:6px; font-weight:600;"></p>
                 </div>
                 <div>
                     <label for="domain_b">Domain B (optional)</label>
                     <input type="text" id="domain_b" name="domain_b" placeholder="e.g. starlingbank.com">
                     <button type="button" class="btn-ghost" style="margin-top:6px;" onclick="guessDomain('company_b', 'domain_b')">Guess domain &rarr;</button>
+                    <p id="domain_b_error" style="display:none; color:#e63946; font-size:12px; margin-top:6px; font-weight:600;"></p>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary">Compare</button>
+            <button type="submit" class="btn btn-primary" id="submit-btn">Compare</button>
         </form>
         {% if error %}
         <p style="background:var(--red-bg); color:var(--red); padding:12px 14px; border-radius:8px; margin-top:16px; font-size:14px;">{{ error }}</p>
@@ -53,9 +55,56 @@
             const data = await response.json();
             if (data.domains && data.domains.length > 0) {
                 document.getElementById(domainFieldId).value = data.domains[0];
+                validateDomainField(companyFieldId, domainFieldId);
             } else { alert("Could not guess a domain for that company."); }
         } catch (error) { alert("Domain guessing failed -- try entering it manually."); }
         finally { button.textContent = originalText; }
     }
+
+    async function validateDomainField(companyFieldId, domainFieldId) {
+        const companyNumber = document.getElementById(companyFieldId).value.trim();
+        const domain = document.getElementById(domainFieldId).value.trim();
+        const errorEl = document.getElementById(domainFieldId + "_error");
+        const inputEl = document.getElementById(domainFieldId);
+
+        if (!companyNumber || !domain) {
+            errorEl.style.display = "none";
+            inputEl.style.borderColor = "";
+            return;
+        }
+
+        errorEl.style.display = "none";
+
+        try {
+            const response = await fetch("/validate-domain", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ company_number: companyNumber, domain: domain }),
+            });
+            const data = await response.json();
+            if (!data.valid) {
+                errorEl.textContent = data.message;
+                errorEl.style.display = "block";
+                inputEl.style.borderColor = "#e63946";
+            } else {
+                errorEl.style.display = "none";
+                inputEl.style.borderColor = "#2a9d6f";
+            }
+        } catch (error) {
+            // Validation is best-effort; a network hiccup here should
+            // never block the user from submitting the form.
+            errorEl.style.display = "none";
+        }
+    }
+
+    document.getElementById("domain_a").addEventListener("blur", function () {
+        validateDomainField("company_a", "domain_a");
+    });
+    document.getElementById("domain_b").addEventListener("blur", function () {
+        validateDomainField("company_b", "domain_b");
+    });
+
+    document.getElementById("compare-form").addEventListener("submit", function () {
+        document.getElementById("loading-overlay").style.display = "flex";
+    });
 </script>
 {% endblock %}
